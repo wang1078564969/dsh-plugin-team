@@ -136,3 +136,74 @@ test('apply() with a broken roster still comes up: the ledger must outlive a bad
     rmSync(dir, { recursive: true, force: true })
   }
 })
+
+test('every message in a group is recorded under that group\'s primary bot', async () => {
+  /*
+   * 用户的要求：**每个群有一个主的机器人，主机器人负责这个群所有消息的记录**。
+   *
+   * 只有在真实入站路径上验过才算数，所以这里喂伪造的飞书事件，走
+   * `handleInbound` → 群记录 → 定主 → 记消息。故意用**没人回答**的闲聊：
+   * 记录照样发生，而 `turns` 不动 —— "记录"与"回答"必须分得开。
+   */
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-team-primary-wiring-'))
+  const team = await import('../lib/team.js')
+  const ctx = fakeCtx()
+  try {
+    await team.apply(ctx, {
+      dataDir: dir,
+      workspace: join(dir, 'ws'),
+      tickIntervalMs: 0,
+      bots: [
+        { id: 'req', displayName: '需求机器人', role: 'req', enabled: true },
+        { id: 'dev', displayName: '开发机器人', role: 'dev', enabled: true },
+      ],
+      feishu: { mode: 'off', appId: 'cli_x', appSecret: 's' },
+    })
+    const controller = ctx.teamFeishu
+    assert.notEqual(controller, undefined, 'the controller is reachable for testing')
+    const store = controller.store
+
+    let seq = 0
+    const event = (text) => {
+      seq += 1
+      return {
+        __appId: 'cli_x',
+        sender: { sender_id: { open_id: 'ou_someone' }, sender_type: 'user' },
+        message: {
+          chat_id: 'oc_a',
+          chat_type: 'group',
+          message_id: 'om_' + String(seq),
+          message_type: 'text',
+          content: JSON.stringify({ text }),
+          create_time: String(Date.now()),
+        },
+      }
+    }
+
+    // 第一条：闲聊、没人回答 —— 群记录照样发生，主按角色优先级定下来。
+    await controller.handleInbound(event('今天天气不错'))
+    const chat = store.get('chat', 'oc_a')
+    assert.equal(chat.primary_bot_id, 'req', '首次接触就定主（不是"谁回答谁是"）')
+    assert.equal(chat.messages, 1)
+    assert.equal(typeof chat.primary_since, 'string')
+    assert.equal(store.get('botsession', 'req.oc_a').seen, 1, '记在主机器人名下')
+    assert.equal(store.get('botsession', 'req.oc_a').turns, 0, '它没有回答，轮次是 0')
+
+    // 第二条：仍然没人回答，仍然记在同一个主名下。
+    await controller.handleInbound(event('那明天呢'))
+    assert.equal(store.get('chat', 'oc_a').messages, 2)
+    assert.equal(store.get('botsession', 'req.oc_a').seen, 2)
+    assert.equal(store.get('botsession', 'req.oc_a').turns, 0)
+
+    // 显式换主之后，新的消息记在新主名下；旧的那段记录不被改写。
+    store.put('chat', { ...store.get('chat', 'oc_a'), primary_bot_id: 'dev', primary_since: new Date().toISOString() })
+    await controller.handleInbound(event('开发看一下'))
+    assert.equal(store.get('chat', 'oc_a').primary_bot_id, 'dev')
+    assert.equal(store.get('chat', 'oc_a').messages, 3)
+    assert.equal(store.get('botsession', 'dev.oc_a').seen, 1, '新主从这个群的下一条开始记')
+    assert.equal(store.get('botsession', 'req.oc_a').seen, 2, '旧主的那段记录还在')
+  } finally {
+    for (const disposer of ctx.effects) if (typeof disposer === 'function') disposer()
+    rmSync(dir, { recursive: true, force: true })
+  }
+})

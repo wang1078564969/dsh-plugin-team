@@ -139,6 +139,24 @@ function configSnapshot() {
       /* Enabled but unable to come online — reported with the host's own reason. */
       offline: [{ botId: 'req', reason: 'no-secret', message: '应用 cli_app1… 没有 appSecret：在「配置」里为它填一个密钥' }],
     },
+    /*
+     * 群列表：每个群的主机器人。一个是已经定了主的群，一个是刚加进来、
+     * 还没有任何消息的群（主为 null）—— 这两种都要能画出来。
+     */
+    chats: [
+      {
+        id: 'oc_a', title: '需求群', chatType: 'group', appId: 'cli_app1',
+        primaryBotId: 'req', primaryBotName: '需求机器人', primarySince: '2026-09-10T08:00:00.000Z',
+        lastBotId: 'dev', messages: 12, turns: 3,
+        lastSeen: '2026-09-12T09:00:00.000Z', lastReplyAt: '2026-09-12T09:01:00.000Z',
+        lastInbound: '重试这块要不要加？',
+      },
+      {
+        id: 'oc_new', title: '', chatType: 'group', appId: 'cli_app1',
+        primaryBotId: null, primaryBotName: null, primarySince: null, lastBotId: null,
+        messages: 0, turns: 0, lastSeen: null, lastReplyAt: null, lastInbound: null,
+      },
+    ],
     sessions: [
       {
         botId: 'req', chatId: 'oc_a', sessionId: 'team-feishu-oc_a', turns: 3,
@@ -299,6 +317,12 @@ async function mountConsole(overrides = {}) {
     let payload
     if (target.includes('/api/team/config')) {
       payload = method === 'POST' ? postResult(JSON.parse(String(options.body)), state) : state.config
+    } else if (target.includes('/api/team/ledger') && method === 'POST') {
+      // 台账路由的动作：host 的成功应答里有 `what`（人话）与 `id`。
+      const body = JSON.parse(String(options.body))
+      payload = body.action === 'set_primary_bot'
+        ? { ok: true, id: body.id, what: '这个群的主机器人已改成 开发机器人（dev）' }
+        : { ok: true, ...state.ledger }
     } else {
       payload = state.ledger
     }
@@ -357,6 +381,15 @@ async function mountConsole(overrides = {}) {
   }
   const activeTabs = () => buttons().filter((button) => button.className.includes('teamled-tab-active')).map((button) => button.textContent)
   const setValue = Object.getOwnPropertyDescriptor(dom.window.HTMLInputElement.prototype, 'value').set
+  /** 下拉框：`type()` 用的是 input 的 value setter，对 <select> 不适用。 */
+  const pick = async (select, value) => {
+    const setSelect = Object.getOwnPropertyDescriptor(dom.window.HTMLSelectElement.prototype, 'value').set
+    await act(async () => {
+      setSelect.call(select, value)
+      select.dispatchEvent(new dom.window.Event('change', { bubbles: true }))
+    })
+    await flush()
+  }
   const type = async (input, value) => {
     await act(async () => {
       setValue.call(input, value)
@@ -374,7 +407,7 @@ async function mountConsole(overrides = {}) {
   }
 
   return {
-    dom, container, root, act, flush, text, buttons, tab, click, openTab, activeTabs, requests, type,
+    dom, container, root, act, flush, text, buttons, tab, click, openTab, activeTabs, requests, type, pick,
     warnings, unmount, assertNoWarnings,
     releaseConfig: () => { if (releaseConfig !== null) releaseConfig() },
   }
@@ -661,6 +694,57 @@ test('the 机器人 page edits a bot — including the Feishu app and its secret
     { apps: { cli_app1: { appSecret: 'new-secret-value' } } },
     'the secret goes to the app the bot speaks through',
   )
+
+  app.assertNoWarnings()
+  await app.unmount()
+})
+
+test('the 会话 page shows each group\'s primary bot, and 改主 submits a ledger action', { skip }, async () => {
+  /*
+   * 用户的要求：**每个群有一个主的机器人，而且主机器人负责这个群所有消息的记录**。
+   * 所以这一页要回答"这个群归谁、它记了多少条、什么时候定的主"，并且人能显式改主
+   * —— 改主是运行态动作（走台账路由），不是配置写入。
+   */
+  const app = await mountConsole()
+  await app.openTab('会话')
+
+  const rendered = app.text()
+  assert.match(rendered, /群与主机器人（2）/)
+  // 群 → 主（名字 + id + 定于）
+  assert.match(rendered, /需求群/)
+  assert.match(rendered, /需求机器人/)
+  assert.match(rendered, /req · 定于/)
+  // 消息数与轮次分开显示：主机器人记的条数本来就多于它回答过的轮次。
+  assert.match(rendered, /12 \/ 3/)
+  // 还没有消息的群没有主，并且说清楚为什么（而不是画一个空下拉让人猜）。
+  assert.match(rendered, /（还没有主：群里还没有消息）/)
+
+  const tables = [...app.container.querySelectorAll('table')]
+  const chatTable = tables.find((table) => String(table.textContent).includes('主机器人'))
+  assert.notEqual(chatTable, undefined, '群表在会话页上')
+  assert.deepEqual(
+    [...chatTable.querySelectorAll('th')].map((th) => th.textContent),
+    ['群', '主机器人', '消息 / 轮次', '上次活动', '改主'],
+  )
+
+  // 选一个新的主 → 改主按钮才可用 → 点它 → 发一条台账动作
+  const selects = [...chatTable.querySelectorAll('select')]
+  assert.equal(selects.length, 2, '每个群一个下拉')
+  const changeButtons = [...chatTable.querySelectorAll('button')].filter((b) => b.textContent === '改主')
+  assert.equal(changeButtons[0].disabled, true, '没选新主时按钮是禁用的')
+  await app.pick(selects[0], 'dev')
+  assert.equal(changeButtons[0].disabled, false, '选了不同的主之后就能点')
+  await app.click(changeButtons[0])
+
+  const posts = app.requests.filter((r) => r.method === 'POST' && r.url.includes('/api/team/ledger'))
+  assert.equal(posts.length, 1, '改主走台账路由，不是配置写入')
+  const body = JSON.parse(String(posts[0].body))
+  assert.equal(body.action, 'set_primary_bot')
+  assert.equal(body.id, 'oc_a')
+  assert.equal(body.assignee, 'bot:dev')
+  assert.equal(body.actor, 'human:fromRoster', 'host 拒绝没有 actor 的写操作，面板把它的 actor 带上')
+  // 成功提示用 host 的原话。
+  assert.match(app.text(), /这个群的主机器人已改成 开发机器人（dev）/)
 
   app.assertNoWarnings()
   await app.unmount()

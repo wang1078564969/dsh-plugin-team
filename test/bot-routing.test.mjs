@@ -106,10 +106,14 @@ test('the session belongs to the bot: team-bot-<bot>-<chat>, one per bot per cha
     assert.equal(result.sessionId, 'team-bot-req-oc_a')
     assert.equal(world.driven[0].sessionId, 'team-bot-req-oc_a')
 
-    // The chat remembers which bot it talks to (that is what makes routing sticky)
-    // and the pair keeps its own counters.
+    /*
+     * 一个群的归属与"最后谁回答"是两件事：`primary_bot_id` 是**主机器人**
+     * （这个群的消息都记在它名下），`last_bot_id` 只是"最后谁回答的"。
+     * 主在这里由路由规则在首次接触时定下。
+     */
     const chat = world.store.get('chat', 'oc_a')
-    assert.equal(chat.bot_id, 'req')
+    assert.equal(chat.primary_bot_id, 'req')
+    assert.equal(chat.last_bot_id, 'req')
     const record = world.store.get('botsession', 'req.oc_a')
     assert.equal(record.turns, 1)
     assert.equal(record.session_id, 'team-bot-req-oc_a')
@@ -119,11 +123,21 @@ test('the session belongs to the bot: team-bot-<bot>-<chat>, one per bot per cha
     assert.equal(world.driven[1].sessionId, 'team-bot-req-oc_b')
     assert.equal(world.store.get('botsession', 'req.oc_b').turns, 1)
 
-    // And in the SAME group, naming the other bot switches to ITS conversation.
+    /*
+     * 同一个群里点名另一个机器人 → 用**它自己的会话**回答，但**主不变**：
+     * 记录归属是群级的，回答是消息级的。这正是"主机器人负责记录所有消息"的落点。
+     */
     await world.responder.onMessage(message({ messageId: 'om_3', text: '@开发机器人 重试这块你看下' }))
     assert.equal(world.driven[2].sessionId, 'team-bot-dev-oc_a')
     assert.equal(world.store.get('botsession', 'dev.oc_a').turns, 1)
-    assert.equal(world.store.get('chat', 'oc_a').bot_id, 'dev', 'the binding follows the bot that answered')
+    const afterNamed = world.store.get('chat', 'oc_a')
+    assert.equal(afterNamed.primary_bot_id, 'req', '点名只是让 dev 回答，不改这个群的主')
+    assert.equal(afterNamed.last_bot_id, 'dev', '但"最后谁回答的"要跟着变')
+    assert.equal(
+      world.store.get('chat', 'oc_a').last_bot_id,
+      'dev',
+      'the "who answered last" marker follows the answering bot',
+    )
   } finally {
     world.cleanup()
   }
