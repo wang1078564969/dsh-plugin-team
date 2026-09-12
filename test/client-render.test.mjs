@@ -427,8 +427,13 @@ async function runChecks({ JSDOM, require }) {
   await act(async () => { await Promise.resolve() })
   const submitBody = JSON.parse(requests[beforeSubmit].options.body)
   ok(submitBody.action === 'submit_task' && submitBody.id === 'task-1', 'submit → {action:"submit_task", id}', JSON.stringify(submitBody))
-  ok(submitBody.evidence !== null && submitBody.evidence.kind === 'note' && submitBody.evidence.note === '由 GUI 提交' && /^gui:\d+$/.test(submitBody.evidence.ref),
-    'submit 带 {kind:"note", ref:"gui:<ts>", note:"由 GUI 提交"}', JSON.stringify(submitBody.evidence))
+  /*
+   * 面板的"提交验收"要如实说明它**没有**证据（这一页没有证据输入框，而状态机要求
+   * 有证据）。写一句"由 GUI 提交"会让人以为有一份可核对的东西。
+   */
+  ok(submitBody.evidence !== null && submitBody.evidence.kind === 'note' && /^gui:\d+$/.test(submitBody.evidence.ref)
+    && String(submitBody.evidence.note).includes('没有附证据'),
+    'submit 带 {kind:"note", ref:"gui:<ts>", note:"…没有附证据…"}', JSON.stringify(submitBody.evidence))
 
   /* verify */
   queue = [{ payload: Object.assign({ ok: true, what: '验收通过，任务完成' }, { snapshot: afterSubmit }) }]

@@ -42,7 +42,7 @@ DSH 的团队协作层：**需求 / 任务 / 两道人工确认 / 租约 / 决�
 | `lib/docs.js` | ✅ **文档载体**（设计 01 §4）：frontmatter 是硬要求（缺 owner 不写）、`docs/index.md` 与 `_meta/docs.json` 可重建、`supersedes`/`related` 的陈旧检测 |
 | `lib/recall.js` | ✅ **回忆**：一次提问同时查工作区文档、DSH 会话历史（`ctx.sessionQuery`）与台账；**不建自建记忆库**（设计 07 §0.3） |
 | `lib/repos.js` | ✅ **Git/MR/CI 对接**（设计 03）：分支与 `Req:`/`Task:` trailer 约定、CI 状态机与 `ci_stuck`、合并三道门判定、敏感文件、仓库知识索引 |
-| `test/` | ✅ 508 个用例全绿（`npm test`），另有 4 个**可选**的渲染测试（见「实测」第 8 条） |
+| `test/` | ✅ 514 个用例全绿（`npm test`），另有 4 个**可选**的渲染测试（见「实测」第 8 条） |
 | 记忆 / skills 库 / 角色 preset 自动生成 | ⬜ 设计文档 07 与 02 §1.2，尚未落进插件 |
 
 ## 三个一等对象：机器人 / 成员 / 会话
@@ -237,6 +237,13 @@ team-feishu-<chatId>             # bots: [] 时的单助手模式（旧行为，
 门禁快照与租约的测试用例都值得继续参考；但 `server/` `console/` `sqlite/` `cli/` 不再开发。
 
 ## 安装（profile 里，已实测）
+
+> 装完之后**看不到侧栏入口**？三件事按顺序查：
+> ① 你起的是不是 `dsh --profile web`（面板只在 web profile 里有 slot）；
+> ② 打开 GUI 时用的是不是启动日志里那个带 `?token=` 的地址（没有换到 cookie 就是 401）；
+> ③ `~/.dsh/team/load-report.txt` 与 `<dataDir>/logs/team.jsonl` 里有没有 `boot` 的 error 行
+> —— 插件是 boot-safe 的，加载失败时它**不会**拖垮 harness，代价就是"悄无声息"，
+> 所以失败原因一定写在这两个文件里。
 
 ```bash
 dsh plugin --profile web add "link:/Users/nitoo/Desktop/DSH 飞书插件/dsh-plugin-team"
@@ -481,8 +488,8 @@ JSON 而不是数据库是**有意的**：出问题时人得能 `cat` 一个需�
     **没有运行态字段泄漏**。指名一个没配密钥的应用 → `invalid_config` + `bots[1].feishu.appId`，
     文件一个字节都没变；已删除的 `feishu.chatIds` → 明确拒绝并指向 `bots[].feishu.chats`。
 
-本地测试：`npm test` → **492 passed / 0 failed / 16 skipped**（跳过的是**可选**渲染测试组：台账页 / 配置页 /
-机器人·成员·会话三页 / 日志页，`npm i -D react react-dom jsdom` 后即跑 → **508 passed / 0 failed / 0 skipped**）。
+本地测试：`npm test` → **498 passed / 0 failed / 16 skipped**（跳过的是**可选**渲染测试组：台账页 / 配置页 /
+机器人·成员·会话三页 / 日志页，`npm i -D react react-dom jsdom` 后即跑 → **514 passed / 0 failed / 0 skipped**）。
 领域层另外用 hub 的 zod 实现当 oracle 做了 12 368 例差分（校验层 307 例逐字一致）；
 分诊/提取层也做了 0 差异差分。
 

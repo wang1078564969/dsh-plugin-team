@@ -221,9 +221,14 @@ test('R1-P0-3 需求变更冻结的任务能被解冻，也能被废弃', async 
     assert.equal(world.store.get('task', taskId).state, 'dropped')
     assert.equal(
       (world.store.get('requirement', reqId).tasks ?? []).includes(taskId),
-      false,
-      '废弃之后它不再占着需求的任务清单（否则需求永远收不了口）',
+      true,
+      '废弃的任务留在清单里（卡上要能看到"这条被废弃了"），收口时由 requirementComplete 忽略它',
     )
+    // 而收口逻辑确实忽略 dropped：只剩它一条时，需求不该被它钉死。
+    const { requirementComplete } = await import('../lib/domain/index.js')
+    assert.equal(requirementComplete(world.store.get('requirement', reqId), world.store.all('task')), false, '没有完成的任务，需求不算完成')
+    world.store.put('task', { ...world.store.get('task', taskId), state: 'done' })
+    assert.equal(requirementComplete({ id: reqId }, [{ req: reqId, state: 'done' }, { req: reqId, state: 'dropped' }]), true)
   } finally {
     world.cleanup()
   }

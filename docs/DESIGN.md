@@ -23,7 +23,7 @@
 持久化是**一对象一文件的 JSON 台账**加几份 append-only 的 jsonl；并发靠"单一写入者 + 每 card_key 串行化"。
 
 体量：`lib/` 共 39 个模块 / 约 23.1k 行（其中浏览器半边 `client.js` 4.9k 行是手写经典脚本），
-`test/` 35 个文件约 14k 行，**506 个用例**（`wc -l` 实测，2026-09-12）。
+`test/` **36 个文件约 19.2k 行，514 个用例**（`wc -l` 实测，2026-09-12 第二轮审查后）。
 
 ---
 
@@ -452,7 +452,7 @@
 
 | 模块 | 行数 | 职责 |
 |---|---|---|
-| `lib/client.js` | 4924 | 浏览器半边：手写经典脚本，侧栏入口 + 六个页签 |
+| `lib/client.js` | 4984 | 浏览器半边：手写经典脚本，侧栏入口 + 六个页签 |
 | `lib/tools.js` | 2100+ | `team` 工具的**全部 39 个动作**（台账、门禁、执行、CI、仓库、文档、回忆），以及三条横切规则：未知 action → `bad_request`、调用方是执行会话 → 拒绝（worker 不得改台账）、handler 抛错 → `handler_failed` |
 | `lib/domain/schema.js` | 1279 | 四类对象的 schema 与校验（逐字对照 hub，含 `.strict()`） |
 | `lib/domain/machine.js` | 873 | 两个状态机（含 CI 与归档的身份守卫） |
@@ -535,7 +535,8 @@ node ~/.dsh/profiles/web/plugins/inventory-check.cjs /tmp/tree.yml
 
 （功能完备性的系统审查见 `docs/REVIEW-01.md` / `REVIEW-02.md`，本节只列写文档时已知的）
 
-0. **两轮审查的跟踪**：第一轮 22 条（4 P0 已修）见 `docs/REVIEW-01.md`；第二轮的镜头是
+0. **两轮审查的跟踪**：第一轮 22 条（`docs/REVIEW-01.md`）、第二轮 25 条（`docs/REVIEW-02.md`），
+   两轮的 P0 与绝大多数 P1 都已修掉并配了回归用例；两轮都把"仍然不修的"和"为什么不修"写在报告末尾。：第一轮 22 条（4 P0 已修）见 `docs/REVIEW-01.md`；第二轮的镜头是
    "**这一批改动有没有引入新问题**"与"**从零装一台到日常用起来，哪一步会卡住**"，
    结论见 `docs/REVIEW-02.md`。本节的缺口表按两轮结论更新。 —— 系统性的功能完备性审查见 `docs/REVIEW-01.md`
    （22 条发现，其中 4 条 P0 已修）；第二轮见 `docs/REVIEW-02.md`。

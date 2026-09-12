@@ -59,22 +59,65 @@ test('词表里的每个动作都有 handler；每个动词只映射到一个动
   }
 })
 
-test('任务卡上每一颗按钮，兜底文案都是一句解析得动的命令', () => {
-  const task = {
-    id: 'task-8891', req: 'req-2026-014', title: '实现退避', state: 'in_progress', type: 'feature_delivery',
-    domains: ['development'], assignee: 'bot:dev', owner: 'bot:dev', acceptance_criteria: ['单测'],
-    gates: { start: { required_by: ['bot:dev'], confirmed_by: [{ by: 'bot:dev', at: '2026-02-03T10:00:00Z' }], due_at: null, not_applicable: false, timeout_snapshot: '2h', on_timeout: 'auto_release', max_release: 2 } },
-    repo: null, branch: null, mr: null, evidence: [{ kind: 'note', ref: 'x', note: 'n' }],
-    release_count: 0, blocked_reason: null, history: [], collaborators: [],
+test('**每一个状态**的任务卡上，每颗按钮的兜底文案都解析得动', () => {
+  /*
+   * 遍历所有状态，而不是只挑一个：`验收通过`（`in_review` 那张卡）就是这样漏掉的 ——
+   * 词表里只有 `验收`/`通过`，而卡片上写的是"验收通过"，照着回复会掉进 prose 分诊。
+   * 一个状态一个状态地跑，才能保证以后新增按钮时不会再出现"卡上写着能做、群里做不了"。
+   */
+  const gate = (required, by) => ({ required_by: required, confirmed_by: by, due_at: null, not_applicable: false, timeout_snapshot: '2h', on_timeout: 'auto_release', max_release: 2 })
+  const tasks = [
+    { state: 'proposed', gates: { confirm_split: gate(['human:pm'], []) } },
+    { state: 'assigned', gates: {} },
+    { state: 'accepted', gates: {} },
+    { state: 'in_progress', gates: {} },
+    { state: 'blocked', gates: {} },
+    { state: 'in_review', gates: { acceptance: gate(['human:pm'], []) } },
+    { state: 'done', gates: {} },
+  ]
+  let checked = 0
+  for (const extra of tasks) {
+    const task = {
+      id: 'task-8891', req: 'req-2026-014', title: '实现退避', type: 'feature_delivery',
+      domains: ['development'], assignee: 'human:pm', owner: 'human:pm', acceptance_criteria: ['单测'],
+      repo: null, branch: null, mr: null, evidence: [{ kind: 'note', ref: 'x', note: 'n' }],
+      release_count: 0, blocked_reason: null, history: [], collaborators: [],
+      ...extra,
+    }
+    const card = buildTaskCard(task, { nonce: () => 'n1', now: () => new Date('2026-02-03T10:00:00Z') })
+    const buttons = card.blocks.filter((one) => one.kind === 'buttons').flatMap((one) => one.buttons)
+    for (const button of buttons) {
+      const hint = commandHintOf(button)
+      const parsed = parseCommand(hint)
+      assert.notEqual(parsed, null, task.state + ' 的按钮「' + button.label + '」解析不了：' + hint)
+      assert.equal(parsed.id, task.id, '兜底文案要带上对象 id：' + hint)
+      checked += 1
+    }
   }
-  const card = buildTaskCard(task, { nonce: () => 'n1', now: () => new Date('2026-02-03T10:00:00Z') })
-  const buttons = card.blocks.filter((one) => one.kind === 'buttons').flatMap((one) => one.buttons)
-  assert.equal(buttons.length > 0, true, '这个状态下应当有按钮')
-  for (const button of buttons) {
-    const hint = commandHintOf(button)
-    const parsed = parseCommand(hint)
-    assert.notEqual(parsed, null, '按钮「' + button.label + '」的兜底文案解析不了：' + hint)
-    assert.equal(parsed.id, task.id, '兜底文案要带上对象 id')
+  assert.equal(checked >= 8, true, '至少覆盖到十几个按钮，实际 ' + String(checked))
+})
+
+test('渲染出来的卡片 JSON 里，每颗按钮反过来也能生成可解析的指令', () => {
+  /*
+   * 上面那条喂的是 spec（`button.label`），而飞书真正收到的是渲染后的 JSON
+   * （按钮文字在 `text.content` 里）。字段名一旦改名，spec 那边的用例照样绿，
+   * 而群里教出来的句子会变成" task-1"这种东西。所以这条从 JSON 反推。
+   */
+  const card = {
+    title: '任务', anchor: 'task-1 · req-1', blocks: [
+      { kind: 'buttons', buttons: [
+        { label: '接受', action: 'task.accept', value: { id: 'task-1', object: 'task' } },
+        { label: '验收通过', action: 'task.verify', value: { id: 'task-1', object: 'task' } },
+      ] },
+    ],
+  }
+  // `payload.content` 本身就是一个 JSON **字符串**（飞书要的就是这个形状）。
+  const json = JSON.parse(degradationLadder(card, { buttons: true })[0].payload.content)
+  const actions = json.elements.find((el) => el.tag === 'action')
+  assert.notEqual(actions, undefined)
+  for (const button of actions.actions) {
+    const hint = commandHintOf({ label: button.text.content, action: button.value.action, value: button.value })
+    assert.notEqual(parseCommand(hint), null, '从渲染结果反推的指令解析不了：' + hint)
   }
 })
 
