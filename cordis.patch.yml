@@ -1,0 +1,22 @@
+# This package's composition layer, applied when the package is installed into a
+# profile with
+#   dsh plugin --profile web add link:/path/to/dsh-plugin-team
+#
+# A package that declares `dsh.bundle.patch` joins the profile's
+# `dsh.profile.bundles` stack automatically, so installing the package IS the
+# installation — no hand-edited composition, and `dsh plugin remove` takes it
+# back out. The path below is relative to THIS file, which keeps the row inside
+# the package wherever pnpm puts it.
+#
+# THE ID IS THE HANDLE. Configuration or disabling happens in the profile's own
+# `cordis.patch.yml`, which is applied after every bundle layer:
+#
+#   - id: team
+#     disabled: true
+#
+#   - id: team
+#     config:
+#       dataDir: /path/to/team-data
+- insert:
+    - id: team
+      name: ./lib/index.js

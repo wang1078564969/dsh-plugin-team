@@ -1,0 +1,15 @@
+# 依赖：这个包运行时只依赖 @larksuiteoapi/node-sdk，装回来是 `npm i`
+node_modules/
+
+# 配置与运行数据永远不进仓库：
+#   ~/.dsh/team/config.json 里有 appSecret，台账目录里有人名与需求原文
+*.bak-*
+config.json
+config-audit.jsonl
+
+# 可选的渲染测试用临时依赖目录
+.team-client-test-modules/
+
+# macOS / 编辑器
+.DS_Store
+*.swp

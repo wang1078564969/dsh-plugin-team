@@ -1,0 +1,164 @@
+{
+  "//": "团队插件配置样例。真正生效的文件是 $DSH_HOME/team/config.json（或者用 row 的 config: 块 / DSH_TEAM_* 环境变量覆盖）。以 // 开头的键是写给人看的注释，程序会忽略它们。",
+  "//dataDir": "对象台账落盘目录（默认 ~/.dsh/team）。注意这一项必须在 env DSH_TEAM_DATA 或 row 的 config: 里给：配置文件本身就在这个目录里，写在这里读不到（校验器会直接拒绝它）。",
+
+  "//workspace": "执行会话的工作目录：任务在这里被真正做掉。env: DSH_TEAM_WORKSPACE",
+  "workspace": "/Users/you/.dsh/team/workspace",
+
+  "//workspaceTitle": "主机 DSH 客户端侧栏里那块的标题：每个机器人的每段会话都挂在这个工作区下",
+  "workspaceTitle": "团队 · 飞书",
+
+  "//defaultOwner": "建需求时没写 owner 就落在他头上，形如 human:<名字>",
+  "defaultOwner": "human:wangmengfan",
+
+  "//tickIntervalMs": "门禁/租约超时的扫描周期；0 = 关掉（改成手动调 team 工具 action=tick）",
+  "tickIntervalMs": 60000,
+
+  "//bots": "机器人 roster（可以多个，和 agent 1:1）。[] 是明确开关：不要 roster，退回「一个助手、一个群一个会话」。默认（不写这一项）是六个常驻角色，只有 req 是启用状态。",
+  "bots": [
+    {
+      "//": "需求机器人：盯需求群，提取诉求、产出需求卡。它服务该应用下所有群（chats 为空）",
+      "id": "req",
+      "displayName": "需求机器人",
+      "role": "req",
+      "baseRole": "req",
+      "enabled": true,
+      "feishu": {
+"//appId": "安装级应用 id（cli_…）：一个 app = 一条长连接 = 一个身份。它同时是这个应用的密钥存放处；机器人各自的 feishu.appId 才是「这台机器人用哪个应用」，留空时由加载器采纳成这一台自己的（见下面的 bots）",
+        "appId": "",
+        "chats": [],
+        "speakPolicy": {
+          "onMention": true,
+          "//onIntent": "没被 @ 但消息像它的活（命中意图词）时也可以回答",
+          "onIntent": true,
+          "//leaseRequired": "没被点名时先拿下这个群的发言租约：一个机器人一个应用时，同一条群消息会在每条连接上各到一次",
+          "leaseRequired": true,
+          "digestOnly": false
+        }
+      },
+      "persona": { "tone": "concise", "language": "zh" },
+      "agentPreset": null,
+      "model": { "primary": null, "perTask": {} },
+      "scope": { "projects": [], "repos": [], "docs": [], "memoryScopes": [] },
+      "permissions": { "canCreate": [], "canUpdate": [], "cannot": [], "writesTo": [], "approvalRequired": [] },
+      "budget": { "dailyTokens": null, "dailyCostUsd": null, "maxConcurrentTasks": 1, "onExceed": "pause" },
+      "skills": [],
+      "knowledgePack": null
+    },
+    {
+      "//": "开发机器人：只在开发群里活动，用 fast 模型跑；被点到名才说话",
+      "id": "dev",
+      "displayName": "开发机器人",
+      "role": "dev",
+      "baseRole": "dev",
+      "enabled": false,
+      "feishu": {
+        "appId": "",
+        "chats": ["oc_your_dev_group"],
+        "speakPolicy": { "onMention": true, "onIntent": false, "leaseRequired": true, "digestOnly": false }
+      },
+      "agentPreset": "standard",
+      "model": { "primary": null, "perTask": {} },
+      "budget": { "dailyTokens": null, "dailyCostUsd": null, "maxConcurrentTasks": 2, "onExceed": "pause" },
+      "skills": []
+    }
+  ],
+
+  "//members": "成员表：一行一个人，角色域分配在人身上（一个人可以有多个域）。旧写法 { \"pm\": [\"human:x\"] } 仍然照读，写回时落到 domains。",
+  "members": [
+    {
+      "key": "human:wangmengfan",
+      "name": "王梦凡",
+      "//openId": "飞书 open_id（ou_…）。填了它，这个人按键确认时才认得出是谁；留空则会被配置检查提醒",
+      "openId": "ou_your_open_id",
+      "role": "owner",
+      "domains": ["pm", "requirement"],
+      "projects": [],
+      "canApprove": ["merge", "config"],
+      "delegate": null,
+      "active": true
+    },
+    {
+      "//": "休假时把 delegate 指向另一个人；active=false 且没有代理时配置检查会提醒（活会卡住）",
+      "key": "human:zhouyu",
+      "name": "周宇",
+      "openId": "",
+      "role": "member",
+      "domains": ["development"],
+      "projects": [],
+      "canApprove": [],
+      "delegate": null,
+      "active": true
+    }
+  ],
+
+  "//domains": "域 → 负责人。它现在是派生结果（由 members 每行的 domains 并出来），也可以像下面这样单独写；台账的「谁该确认」读的就是它。",
+  "domains": {
+    "pm": ["human:wangmengfan"],
+    "requirement": ["human:wangmengfan"],
+    "development": ["human:zhouyu"],
+    "testing": [],
+    "ops": [],
+    "security": []
+  },
+
+  "//feishu": "飞书接入。mode=own 是自己拨长连接（默认），off = 完全不接收（出站卡片仍可用）",
+  "feishu": {
+    "mode": "own",
+    "//appId": "安装级应用 id（cli_…）：一个 app = 一条长连接 = 一个身份。它同时是这个应用的密钥存放处；机器人各自的 feishu.appId 才是「这台机器人用哪个应用」，留空时由加载器采纳成这一台自己的（见下面的 bots）",
+    "appId": "cli_your_app_id",
+    "//appSecret": "只写不读：面板里回显的是「已设置」，留空表示不修改。env: DSH_TEAM_FEISHU_APP_SECRET",
+    "appSecret": "",
+    "//botOpenId": "机器人自己的 open_id（ou_…）。留空则启动时问 /bot/v3/info 自动探测",
+    "botOpenId": "",
+    "//apps": "应用登记表：{appId: {appSecret, botOpenId, name}}。面板把密钥写在**机器人页**（选中那台机器人 → 应用密钥），也就是写到这里；没配密钥的应用不会静默换成别的身份，而是明确报错",
+    "apps": {
+      "cli_example0000000000": {
+        "name": "开发线应用",
+        "appSecret": "",
+        "botOpenId": ""
+      }
+    },
+    "//requireMention": "群聊只在被 @（或被点名）时开口；私聊永远开口",
+    "requireMention": true,
+    "//respond": "false = 只把消息记进台账，不在群里回答",
+    "respond": true,
+    "//addressedOverridesIntent": "@ 了机器人就不再要求命中意图词（被点名是最强的意图信号）",
+    "addressedOverridesIntent": true,
+    "//buttons": "卡片按钮需要飞书能回调到的 HTTPS 入口；DSH Web 只监听 127.0.0.1，所以默认关闭，卡片上写文本指令",
+    "buttons": false,
+    "//chatIds": "这个键已经删除：插件从来没有读它（填了也不会只处理那些群）。群绑定在机器人身上 —— 见上面 bots[].feishu.chats。留在这里的旧值会被配置检查直接拒绝，理由是「别让人以为它生效」。",
+    "//speakLeaseMs": "两个机器人都可能接话时，先开口的那个把这个群占住多久",
+    "speakLeaseMs": 90000,
+    "//senders": "open_id → human:<名字>。没登记的人只能看，不能改台账（否则谁都能替别人确认任务）",
+    "senders": {
+      "ou_your_open_id": "human:wangmengfan"
+    },
+    "//chatActors": "chat_id → human:<名字>：\"这个群里转发过来的话就算他的\"。只在「一个群=一个人」真的成立时用",
+    "chatActors": {}
+  },
+
+  "//gates": "新建任务时冻结进门禁快照；之后改这里不影响进行中的任务",
+  "gates": {
+    "confirm_split": { "timeout": "8h", "on_timeout": "remind_then_escalate", "max_release": null },
+    "accept": { "timeout": "4h", "on_timeout": "remind_then_escalate", "max_release": null },
+    "start": { "timeout": "2h", "on_timeout": "auto_release", "max_release": 2 },
+    "acceptance": { "timeout": "8h", "on_timeout": "escalate_to_owner", "max_release": null }
+  },
+
+  "//sessions": "执行会话：按角色指定 agent preset（req/dev/qa/coord/pm…），以及模型覆盖。机器人自己的 agentPreset / model.primary 优先",
+  "sessions": {
+    "preset": null,
+    "presets": {
+      "dev": null,
+      "qa": null,
+      "req": null,
+      "coord": null
+    },
+    "provider": null,
+    "model": null,
+    "reasoningEffort": null,
+    "turnTimeoutMs": 900000,
+    "maxLive": 4
+  }
+}
