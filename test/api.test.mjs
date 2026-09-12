@@ -21,7 +21,7 @@ import { createHandlers } from '../lib/tools.js'
 
 function makeApi() {
   const dir = mkdtempSync(join(tmpdir(), 'dsh-team-api-'))
-  const config = loadConfig({ workspace: join(dir, 'workspace'), tickIntervalMs: 0 })
+  const config = loadConfig({ dataDir: dir, workspace: join(dir, 'workspace'), tickIntervalMs: 0 })
   const store = new Store(dir).load()
   const handlers = createHandlers({
     ctx: { get: () => undefined, on: () => () => {}, effect: (factory) => factory() },

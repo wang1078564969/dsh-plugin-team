@@ -138,14 +138,17 @@ test('卡片渲染成 markdown：状态行、确认行、表格、按钮、页�
   assert.ok(md.includes('✅ 需求已确认'))
   assert.ok(md.includes('```'), '表格应降级为代码块')
   assert.ok(md.includes('[接受]'))
-  assert.ok(md.includes('task.accept'), '要有文本兜底指令')
+  // 兜底指令必须是**群命令真正认的那一句**（动词 + 对象 id），不是内部 action 名：
+  // 照着 `task.accept` 回复会被当散文走分诊，可能建出一条垃圾需求。
+  assert.ok(md.includes('`接受 task-8891`'), '要有能用的文本兜底指令：' + md)
+  assert.equal(md.includes('task.accept'), false, '不能再教内部动作名（解析器不认）')
   assert.ok(md.includes('⏱ 2m14s'))
 })
 
-test('去掉按钮时，按钮变成"回复动作名"的文本指令', () => {
+test('去掉按钮时，按钮变成"回复群命令"的文本指令', () => {
   const md = renderCardAsMarkdown(SAMPLE, { buttons: false })
   assert.ok(!md.includes('[接受]'))
-  assert.ok(md.includes('回复 `task.accept`'))
+  assert.ok(md.includes('回复 `接受 task-8891`'), '兜底要教群命令真正认的那一句：' + md)
 })
 
 test('卡片 JSON：header 带锚点，表格用原生组件，按钮 value 带 action', () => {
@@ -275,8 +278,8 @@ test('前三级是卡片、后两级是文本；表格与按钮逐级变少', ()
   assert.equal(countTags(ladder[1].payload, 'table'), 0, '第 2 级表格拍平成文本')
   assert.equal(countTags(ladder[1].payload, 'action'), 1, '第 2 级仍保留按钮')
   assert.equal(countTags(ladder[2].payload, 'action'), 0, '第 3 级去按钮改文本指令')
-  assert.ok(ladder[2].payload.content.includes('回复 `task.accept`'), '去按钮要留文本兜底')
-  assert.ok(ladder[3].payload.content.includes('task.accept'), '第 4 级纯文本仍带动作名')
+  assert.ok(ladder[2].payload.content.includes('回复 `接受 task-8891`'), '去按钮要留文本兜底')
+  assert.ok(ladder[3].payload.content.includes('接受 task-8891'), '第 4 级纯文本仍带同一句指令')
 })
 
 test('每一级的 payload 都带幂等键，且不超过飞书的 50 字符上限', () => {

@@ -93,7 +93,11 @@ test('降级率只数成功投递，且失败不算进分母', () => {
     assert.equal(delivery.total, 11, '分母 = 成功投递（delivered + updated），不含 90 次失败')
     assert.equal(delivery.card, 8)
     assert.equal(delivery.fallback, 3)
-    assert.equal(delivery.fallbackRate, 3 / 11)
+    // 逐次投递口径（本进程）：
+    assert.equal(delivery.sessionFallbackRate, 3 / 11)
+    // 落盘口径：这个用例没有卡台账 → 0，而不是把本进程的数当成持久事实。
+    assert.equal(delivery.durable.total, 0)
+    assert.equal(delivery.fallbackRate, 0, '没有落盘证据时降级率是 0，不谎报')
     assert.deepEqual(
       delivery.tiers.map((tier) => tier.via).sort(),
       ['card', 'card-no-buttons', 'text', 'text-with-file'].sort(),

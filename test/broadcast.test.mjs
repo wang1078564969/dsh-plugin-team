@@ -183,7 +183,9 @@ test('footer 不谎报 0：provider 没上报的字段整段不显示', () => {
   // 超时是"它还在等"的信号，不能省。
   assert.equal(footerOf(task, { elapsed_ms: 60_000, timed_out: true }), 'backend · ⏱ 1m00s（超时）')
   // 结构不对的实测数据也不能把 footer 弄成乱码。
-  assert.equal(footerOf(task, { elapsed_ms: 'abc', steps: -3, tokens: { value: 0 } }), 'backend')
+  assert.equal(footerOf(task, { elapsed_ms: 'abc', steps: -3, tokens: { value: -1 } }), 'backend')
+  // 但"量到 0"要显示：与 `elapsed=0` 同一个语义（量不到才不显示）。
+  assert.equal(footerOf(task, { elapsed_ms: 0, tokens: { value: 0, source: 'usage' } }), 'backend · ⏱ 0ms · 🧠 0 tok')
   assert.equal(footerOf(task, 'nonsense'), 'backend')
 })
 

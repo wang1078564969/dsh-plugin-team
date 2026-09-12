@@ -722,8 +722,17 @@ test('需求负责人总能验收（哪怕他不是任何角色域的负责人�
     dataDir: dir,
     workspace: join(dir, 'ws'),
     tickIntervalMs: 0,
-    // 需求负责人 human:pm1 既不是 development 域的负责人，也不是 pm 域的成员。
-    members: { pm: ['human:someone-else'], requirement: ['human:pm1'], development: ['human:dev'] },
+    /*
+     * 需求负责人 human:pm1 既不是 development 域的负责人，也不是 pm 域的成员。
+     * `human:outsider` 是**在名册里、但跟这个任务无关**的人：用来验"成员闸放过了他、
+     * 状态机仍然拒绝他"这条分工（两层闸各管各的）。
+     */
+    members: {
+      pm: ['human:someone-else'],
+      requirement: ['human:pm1'],
+      development: ['human:dev'],
+      docs: ['human:outsider'],
+    },
   })
   const agents = {
     get: () => undefined,
@@ -747,8 +756,15 @@ test('需求负责人总能验收（哪怕他不是任何角色域的负责人�
     const ran = await handlers.run_task({ id: taskId })
     assert.equal(ran.ok, true, JSON.stringify(ran))
 
-    // 先确认"跟这事无关的人"依然不能点头（任务还在 in_review 时）
-    const outsider = handlers.verify_task({ id: taskId, actor: 'human:nobody' })
+    /*
+     * 两层闸各管各的：
+     *   · 名册之外的人**第一层就挡住**（成员闸）—— 名册非空时它是白名单；
+     *   · 名册之内、但跟这个任务无关的人，由状态机拒绝（`forbidden`）。
+     */
+    const notMember = handlers.verify_task({ id: taskId, actor: 'human:nobody' })
+    assert.equal(notMember.ok, false)
+    assert.equal(notMember.code, 'not_a_member')
+    const outsider = handlers.verify_task({ id: taskId, actor: 'human:outsider' })
     assert.equal(outsider.ok, false)
     assert.equal(outsider.code, 'forbidden')
 

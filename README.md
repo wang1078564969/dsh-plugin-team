@@ -7,6 +7,9 @@ DSH 的团队协作层：**需求 / 任务 / 两道人工确认 / 租约 / 决�
 
 ## 现在能跑什么
 
+> 想看"现在到底是什么样"（架构、数据模型、每条链路的失败行为、不变量）读 `docs/DESIGN.md`；
+> 想看"还差什么"读 `docs/REVIEW-01.md`（第一轮审查，22 条发现）与 `docs/GAP-VS-DESIGN.md`。
+
 一句话：**群里说一句话 → 变成需求对象 → 拆任务 → 两道确认 → 交给执行会话跑一轮 → 汇报回写成证据 → 提交验收**，
 并且在 DSH GUI 里有一块台账面板可以看和点。整条链路都在真实 harness / 真实飞书凭据上验过（见「实测」）。
 
@@ -39,7 +42,7 @@ DSH 的团队协作层：**需求 / 任务 / 两道人工确认 / 租约 / 决�
 | `lib/docs.js` | ✅ **文档载体**（设计 01 §4）：frontmatter 是硬要求（缺 owner 不写）、`docs/index.md` 与 `_meta/docs.json` 可重建、`supersedes`/`related` 的陈旧检测 |
 | `lib/recall.js` | ✅ **回忆**：一次提问同时查工作区文档、DSH 会话历史（`ctx.sessionQuery`）与台账；**不建自建记忆库**（设计 07 §0.3） |
 | `lib/repos.js` | ✅ **Git/MR/CI 对接**（设计 03）：分支与 `Req:`/`Task:` trailer 约定、CI 状态机与 `ci_stuck`、合并三道门判定、敏感文件、仓库知识索引 |
-| `test/` | ✅ 494 个用例全绿（`npm test`），另有 4 个**可选**的渲染测试（见「实测」第 8 条） |
+| `test/` | ✅ 506 个用例全绿（`npm test`），另有 4 个**可选**的渲染测试（见「实测」第 8 条） |
 | 记忆 / skills 库 / 角色 preset 自动生成 | ⬜ 设计文档 07 与 02 §1.2，尚未落进插件 |
 
 ## 三个一等对象：机器人 / 成员 / 会话
@@ -478,8 +481,8 @@ JSON 而不是数据库是**有意的**：出问题时人得能 `cat` 一个需�
     **没有运行态字段泄漏**。指名一个没配密钥的应用 → `invalid_config` + `bots[1].feishu.appId`，
     文件一个字节都没变；已删除的 `feishu.chatIds` → 明确拒绝并指向 `bots[].feishu.chats`。
 
-本地测试：`npm test` → **478 passed / 0 failed / 16 skipped**（跳过的是**可选**渲染测试组：台账页 / 配置页 /
-机器人·成员·会话三页 / 日志页，`npm i -D react react-dom jsdom` 后即跑 → **494 passed / 0 failed / 0 skipped**）。
+本地测试：`npm test` → **490 passed / 0 failed / 16 skipped**（跳过的是**可选**渲染测试组：台账页 / 配置页 /
+机器人·成员·会话三页 / 日志页，`npm i -D react react-dom jsdom` 后即跑 → **506 passed / 0 failed / 0 skipped**）。
 领域层另外用 hub 的 zod 实现当 oracle 做了 12 368 例差分（校验层 307 例逐字一致）；
 分诊/提取层也做了 0 差异差分。
 

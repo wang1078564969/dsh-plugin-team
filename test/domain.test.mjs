@@ -783,17 +783,21 @@ test('机器人执行者：accept/start 门禁不适用，但验收门禁照常�
 
 test('CI 失败回到执行者，不带证据也能回退', () => {
   const t = fixture('ci_running')
-  const failed = transitionTask(t, 'ci_fail', 'system', ctx())
+  // 执行者本人（或需求负责人/域负责人）才能推 CI —— 以前这里**没有任何守卫**，
+  // 任何人都能把任务标成"CI 通过"，而合并判定读的正是这个状态。
+  const failed = transitionTask(t, 'ci_fail', DEV, ctx())
   assert.ok(failed.ok)
   assert.equal(failed.next.state, 'in_progress')
+  expectErr(transitionTask(fixture('ci_running'), 'ci_fail', 'human:stranger', ctx()), 'forbidden')
 })
 
 test('CI 通过进入待验收，并激活验收门禁', () => {
   const t = fixture('ci_running')
-  const passed = transitionTask(t, 'ci_pass', 'system', ctx())
+  const passed = transitionTask(t, 'ci_pass', DEV, ctx())
   assert.ok(passed.ok)
   assert.equal(passed.next.state, 'in_review')
   assert.equal(passed.next.gates.acceptance?.due_at, '2026-02-03T18:00:00.000Z')
+  expectErr(transitionTask(fixture('in_progress'), 'ci_start', 'human:stranger', ctx()), 'forbidden')
 })
 
 test('阻塞与解除', () => {
@@ -850,12 +854,15 @@ test('执行者不能废弃任务', () => {
   assert.equal(dropped.next.state, 'dropped')
 })
 
-test('归档只有 done 能做，且不需要额外权限', () => {
+test('归档只有 done 能做，且只有需求负责人或项目经理能归档', () => {
   const t = fixture('done')
-  const archived = transitionTask(t, 'archive', DEV, ctx())
+  const archived = transitionTask(t, 'archive', REQ_OWNER, ctx())
   assert.ok(archived.ok)
   assert.equal(archived.next.state, 'archived')
   expectErr(transitionTask(fixture('in_progress'), 'archive', REQ_OWNER, ctx()), 'invalid_state')
+  // 归档让任务转只读，是治理动作：普通执行者不行。
+  expectErr(transitionTask(fixture('done'), 'archive', DEV, ctx()), 'forbidden')
+  assert.ok(transitionTask(fixture('done'), 'archive', PM, ctx()).ok, '项目经理可以')
 })
 
 test('未实现的动作返回 unknown（而不是抛异常）', () => {
