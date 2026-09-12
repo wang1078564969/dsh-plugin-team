@@ -16,6 +16,8 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 
 import { FeishuClient, resolveCredentials } from '../lib/feishu/client.js'
+import { findDuplicate as realFindDuplicate } from '../lib/feishu/extract.js'
+import { selectContextMessages as realSelectContextMessages } from '../lib/feishu/triage.js'
 import { Inbox, createIngest, looksAddressed, parseCommand, resolveSender } from '../lib/feishu/ingest.js'
 import { mentionsBot, normalizeMessage, parseContent, readableText } from '../lib/feishu/connection.js'
 
@@ -439,12 +441,20 @@ test('looksAddressed only fires on a real mention', () => {
 function fakeIngest(feishuOverrides) {
   const dir = mkdtempSync(join(tmpdir(), 'team-ingest-'))
   const sent = []
+  const requirements = []
   const handlers = {
     calls: [],
     list: () => ({ ok: true, rows: [] }),
     create_requirement(args) {
       handlers.calls.push({ action: 'create_requirement', args })
-      return { ok: true, id: 'req-2026-001', state: 'draft', title: args.title }
+      /*
+       * 替身也要**真的把需求建出来**：否则"去重"永远看不到已有需求，
+       * 用例会绿而行为不存在（第一版就是这样）。id 按建单次数递增，
+       * 这样"第二条被并进第一条"才测得出是哪一条。
+       */
+      const id = 'req-2026-' + String(requirements.length + 1).padStart(3, '0')
+      requirements.push({ id, title: args.title, state: 'draft', links: { repos: args.repos ?? [] } })
+      return { ok: true, id, state: 'draft', title: args.title }
     },
     accept_task(args) {
       handlers.calls.push({ action: 'accept_task', args })
@@ -452,7 +462,24 @@ function fakeIngest(feishuOverrides) {
     },
   }
   const inbox = new Inbox(dir).load()
-  const store = { get: () => ({ id: 'req-2026-001', title: '导出功能', state: 'draft', tasks: [] }) }
+  /*
+   * 替身 store：`get` 给建单后读需求用；`all` 给**去重**用（要比对已有需求）。
+   * 以前的替身只有 `get`，于是"去重"这条路径在这个测试里根本走不到 ——
+   * 用例会绿，但测的是不存在的行为。
+   */
+  const store = {
+    get: (kind, id) => (kind === 'requirement' ? requirements.find((one) => one.id === id) ?? null : null),
+    put: (kind, doc) => {
+      if (kind === 'requirement') {
+        const at = requirements.findIndex((one) => one.id === doc.id)
+        if (at >= 0) requirements[at] = doc
+        else requirements.push(doc)
+      }
+      return doc
+    },
+    all: (kind) => (kind === 'requirement' ? [...requirements] : []),
+    find: () => [],
+  }
   const config = {
     dataDir: dir,
     defaultOwner: 'human:owner',
@@ -471,16 +498,38 @@ function fakeIngest(feishuOverrides) {
   // The real protocol modules are pure; a minimal stand-in keeps this test
   // about the INGEST wiring rather than about triage's own judgement.
   const triage = {
+    // 窗口规则用真的那一份：这里测的是"流水线有没有用它"，规则本身在 triage.test.mjs 里测。
+    selectContextMessages: realSelectContextMessages,
     DEFAULT_TRIAGE_CONFIG: { reaction: 'Get', require_intent: true, min_substance_chars: 4, intent_words: [], smalltalk_patterns: [], question_patterns: [] },
     triageMessage({ text }) {
       if (/哈哈|呵呵/.test(text)) return { kind: 'smalltalk', reason: '寒暄或应答', cleaned: text, has_intent: false, substantive: true, intent_hits: [] }
+      /*
+       * 有实质内容、但**没有诉求词**的一类（设计里叫 status）：它们不建单，
+       * 只记原因 —— 而"批次窗口"要的正是这种前几句：它们留在收件箱里没被消费，
+       * 成为后面那句被 @ 的消息的上下文。
+       */
+      if (/老是|现在|因为|已经/.test(text)) {
+        return { kind: 'status', reason: '没有发现表达诉求的词', cleaned: text, has_intent: false, substantive: true, intent_hits: [] }
+      }
       return { kind: 'requirement', reason: '有实质内容且表达诉求', cleaned: text, has_intent: true, substantive: true, intent_hits: ['加'] }
     },
   }
   const extract = {
-    extractRequirement() {
+    /*
+     * 去重判据用**真的**那一份：这个文件测的是"流水线有没有调它、并入了没有"，
+     * 判据本身的分数在 extract.test.mjs 里测。第一版这里连函数都没有，
+     * 于是去重那条路径根本走不到 —— 用例会绿，行为不存在。
+     */
+    findDuplicate: realFindDuplicate,
+    extractRequirement(messages) {
+      /*
+       * 用**这一批消息**填摘录：批次窗口是这条流水线的行为，替身如果把 messages
+       * 丢掉，"一批消息合成一个需求"就没法断言了（第一版正是这样：
+       * 用例写过、也绿过，但它测的东西不存在）。
+       */
+      const usable = Array.isArray(messages) ? messages.filter((one) => String(one.text ?? '') !== '') : []
       return {
-        draft: { title: '导出功能', problem: '需要导出', proposal: '', acceptance_criteria: ['能导出 CSV'], priority: 'P2', repos: [], requester: null, excerpts: [], source_message_ids: [] },
+        draft: { title: '导出功能', problem: '需要导出', proposal: '', acceptance_criteria: ['能导出 CSV'], priority: 'P2', repos: [], requester: null, excerpts: usable.map((one) => String(one.text)), source_message_ids: [] },
         reason: '规则判定为需求',
         missing: [],
         confidence: 0.8,
@@ -504,3 +553,73 @@ function inbound(overrides) {
     ...overrides,
   }
 }
+
+test('a similar request is merged into the existing requirement instead of opening a second card', async () => {
+  /*
+   * 设计 02 §5.7：相似度识别 → 并入已有需求卡并播报。`findDuplicate` 一直躺在
+   * extract.js 里没人调用，于是同一件事说三遍就是三个需求、三张卡问同样的问题。
+   */
+  const { ingest, handlers, sent, inbox } = fakeIngest({})
+  const first = await ingest.onMessage(inbound({ messageId: 'om_1', text: '@机器人 加一个导出功能，要能导出 CSV' }))
+  assert.equal(first.kind, 'requirement')
+
+  // 换一条消息、换个说法说同一件事：不该再建一张卡。
+  const second = await ingest.onMessage(inbound({ messageId: 'om_2', text: '@机器人 能不能加导出功能，导出 CSV 就行' }))
+  assert.equal(second.kind, 'duplicate', JSON.stringify(second))
+  assert.equal(typeof second.duplicate_of, 'string')
+  assert.equal(handlers.calls.filter((call) => call.action === 'create_requirement').length, 1, '只建了一个需求')
+  // 说的人要知道被收到了，而且知道记到哪去了
+  const mergedReply = sent.map((one) => String(one.text ?? '')).find((text) => text.includes('同一条'))
+  assert.notEqual(mergedReply, undefined, '群里回一句"并入哪一条"')
+  assert.match(mergedReply, new RegExp(String(second.duplicate_of)))
+  // 审计：这一条被谁收了、相似度多少
+  const record = inbox.get('om_2')
+  assert.equal(record.duplicate_of, second.duplicate_of)
+  assert.equal(typeof record.duplicate_score, 'number')
+  assert.deepEqual(record.consumed_by, [second.duplicate_of], '原始消息也算被这个需求消费了')
+})
+
+test('consecutive messages from one sender become ONE requirement, not three', async () => {
+  /*
+   * 设计 02 §2.2.3#2："回看窗口有上限、别人插话即话题边界"。以前只喂 `[message]`，
+   * 于是连续三条说同一件事 = 三个需求 —— 需求的颗粒度变成了打字的颗粒度。
+   */
+  const { ingest, handlers } = fakeIngest({})
+  await ingest.onMessage(inbound({ messageId: 'om_a1', text: '支付这块老是超时', sender: 'ou_wang' }))
+  await ingest.onMessage(inbound({ messageId: 'om_a2', text: '因为现在失败一次就得人工补', sender: 'ou_wang' }))
+  const triggered = await ingest.onMessage(
+    inbound({ messageId: 'om_a3', text: '@机器人 能不能自动重试 3 次', sender: 'ou_wang' }),
+  )
+  assert.equal(triggered.kind, 'requirement', JSON.stringify(triggered))
+  const created = handlers.calls.filter((call) => call.action === 'create_requirement')
+  assert.equal(created.length, 1, '一批消息只建一个需求')
+  const excerpts = created[0].args.excerpts ?? []
+  assert.deepEqual(
+    excerpts,
+    ['支付这块老是超时', '因为现在失败一次就得人工补', '@机器人 能不能自动重试 3 次'],
+    '三句话是同一批（前两句是上文，触发的是第三句）',
+  )
+})
+
+test('the bot asks once for the missing piece, then goes passive in that chat', async () => {
+  /*
+   * 设计 02 §7.1#3："需求机器人主动追问，默认只追一次，之后转被动"。
+   * `decideIngestAsk` 也是零调用点：于是"信息不全"只体现在卡上的一行字，
+   * 没有人被问过。这里测的是**真的问出去**、而且**第二次不再问**。
+   */
+  const { ingest, sent, store } = fakeIngest({})
+  // 没被 @、信息很不全的一类（低置信度）—— 移植过来的策略只在这一类上追问。
+  const first = await ingest.onMessage(inbound({ messageId: 'om_q1', text: '导出？', sender: 'ou_wang' }))
+  const asked = sent.map((one) => String(one.text ?? '')).find((text) => text.includes('怎样算做完') || text.includes('还需要补充'))
+  if (first.created === null || asked === undefined) {
+    // 这一条没被判成需求：那就不该追问（策略里写明了"还没判定成需求，不追问"）
+    assert.equal(asked, undefined)
+    return
+  }
+  assert.notEqual(store.get('chat', 'oc_a').ask, null, '问过一次要记在这个群上（重启后仍然记得）')
+  const countAfterFirst = store.get('chat', 'oc_a').ask.count
+
+  const second = await ingest.onMessage(inbound({ messageId: 'om_q2', text: '导出？', sender: 'ou_wang' }))
+  assert.equal(second.created === null || second.asked === undefined, true, '第二次不再追问')
+  assert.equal(store.get('chat', 'oc_a').ask.count, countAfterFirst, '计数不再增长')
+})

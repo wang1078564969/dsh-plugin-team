@@ -254,6 +254,8 @@ async function runChecks({ JSDOM, require }) {
         acceptance_criteria: ['能导出', '字段齐全'],
         tasks: ['task-1'],
         body: { problem: '现在只能截图', proposal: '加一个导出按钮' },
+        // 状态机允许什么，面板就画什么（host 的 `available`）
+        available: ['confirm_split', 'suspend', 'drop', 'change'],
         history: [{ from: 'draft', to: 'confirmed', by: 'human:pm1', at: '2026-01-01T10:00:00.000Z', effects: [] }],
       }],
       tasks: [{
@@ -377,6 +379,19 @@ async function runChecks({ JSDOM, require }) {
 
   const run3 = await fire('接受（门禁 1）', { payload: Object.assign({ ok: true, what: '已接受', id: 'task-1' }, { snapshot: snapshot() }) })
   ok(run3.request.options.body.length > 0, '（第 3 次调用仍然带 body）')
+
+  /*
+   * 需求动作：按钮来自 host 的 `available`（状态机允许什么就画什么），
+   * 面板不再自己维护一份状态表。以前需求卡片是只读的 —— confirm/confirm_split/
+   * archive/suspend 在状态机里都有，面板一个按钮都没有。
+   */
+  queue = []
+  const reqButtons = () => [...document.querySelectorAll('button')].filter((b) => b.textContent === '确认拆解' || b.textContent === '挂起')
+  ok(reqButtons().length === 2, 'dispatched 的需求画出 confirm_split 与 suspend', reqButtons().map((b) => b.textContent).join(','))
+  const reqRun = await fire('确认拆解', { payload: Object.assign({ ok: true, what: '需求已派发', id: 'req-2026-001', state: 'dispatched' }, { snapshot: snapshot() }) })
+  ok(reqRun.body !== null && reqRun.body.action === 'confirm_split' && reqRun.body.id === 'req-2026-001' && reqRun.body.actor === 'human:pm1',
+    '需求按钮 → {action:"confirm_split", id, actor}', JSON.stringify(reqRun.body))
+  ok(text().indexOf('「变更」与「废弃」要写原因') >= 0, '不画那两个按钮，但说明去哪儿做（静默丢掉理由更坏）')
 
   /* tick（预演）：故意【不带】snapshot，用来验证“否则重新 GET”那条回退路径 */
   const afterTick = snapshot()
@@ -588,3 +603,4 @@ async function runChecks({ JSDOM, require }) {
   ok(requests.length === afterUnmount, '面板卸载后没有残留的监听（副作用跟着 fiber 走）', requests.length - afterUnmount)
   return { failures, checks }
 }
+

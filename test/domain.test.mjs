@@ -600,38 +600,47 @@ test('硬闸二 evidence_required：submit 与 verify 无证据直接拒', () =>
   assert.ok(verified.ok)
 })
 
-test('硬闸三 gate_incomplete：required_by 还有人没确认就不能完成', () => {
+test('硬闸三 gate_incomplete：确认**累积**、缺一方不推进（不是永远 ping-pong）', () => {
+  /*
+   * 这条原样搬自 hub，而 hub 的行为是个 bug（README 的"已知问题"里钉着）：
+   * 失败跃迁不写回对象 → 第一个人点完还是"还差两个人"，第二个人点完还是"还差两个人"，
+   * 永远 ping-pong。设计 04 §3.5 要的是**并行确认、缺一方不推进**：
+   * 每一次确认都留在门禁上，人齐了才完成。
+   *
+   * 所以这里与 hub **故意不同**：第一次确认返回 `ok: true` + `partial: true`，
+   * 状态不动但这一票记下了；调用方（工具层）会把它写回对象。
+   */
   const base = fixture('in_review', { assignee: QA })
   const acceptance = { ...base.gates.acceptance, required_by: [REQ_OWNER, DEV], confirmed_by: [] }
   const t = { ...base, evidence: EVIDENCE, gates: { ...base.gates, acceptance } }
   const acceptorsFor = ctx({ acceptors: [REQ_OWNER, DEV] })
 
   const first = transitionTask(t, 'verify', REQ_OWNER, acceptorsFor)
-  expectErr(first, 'gate_incomplete')
-  assert.deepEqual(first.pending, [DEV], '还差谁必须能直接拿去催办')
-
-  // 注意：失败跃迁不会写回对象，所以第一次的确认没有落盘（hub 同样如此）。
-  // 第二次由 DEV 点，仍然差 REQ_OWNER —— 这说明“半确认”不会被当成通过。
-  const second = transitionTask(t, 'verify', DEV, acceptorsFor)
-  expectErr(second, 'gate_incomplete')
-  assert.deepEqual(second.pending, [REQ_OWNER])
-
-  // 门禁上已有 DEV 的确认时，REQ_OWNER 一点就齐活
-  const halfDone = {
-    ...t,
-    gates: {
-      ...t.gates,
-      acceptance: { ...acceptance, confirmed_by: [{ by: DEV, at: NOW.toISOString() }] },
-    },
-  }
-  const both = transitionTask(halfDone, 'verify', REQ_OWNER, acceptorsFor)
-  assert.ok(both.ok)
-  assert.equal(both.next.state, 'done')
-  assert.deepEqual(
-    both.next.gates.acceptance?.confirmed_by.map((c) => c.by),
-    [DEV, REQ_OWNER],
-    '自己的那一条追加在已有确认后面',
+  assert.equal(first.ok, true, '这一票有效，不该被丢掉')
+  assert.equal(first.partial, true, '但任务还没完成')
+  assert.deepEqual(first.pending, [DEV], '还差谁能直接拿去催办')
+  assert.equal(first.next.state, 'in_review', '状态不动：缺一方不推进')
+  assert.equal(
+    first.next.gates.acceptance.confirmed_by.some((one) => one.by === REQ_OWNER),
+    true,
+    '第一票记在门禁上（这就是不再 ping-pong 的地方）',
   )
+
+  // 把"半确认"写回对象之后，第二个人一点就齐活。
+  const second = transitionTask(first.next, 'verify', DEV, acceptorsFor)
+  assert.equal(second.ok, true, JSON.stringify(second))
+  assert.equal(second.partial, undefined)
+  assert.equal(second.next.state, 'done')
+  assert.deepEqual(
+    second.next.gates.acceptance.confirmed_by.map((c) => c.by),
+    [REQ_OWNER, DEV],
+    '两条确认都在，顺序保持追加',
+  )
+
+  // 同一个人确认两次不会写两条（satisfyGate 既有语义）
+  const again = transitionTask(first.next, 'verify', REQ_OWNER, acceptorsFor)
+  assert.equal(again.partial, true)
+  assert.equal(again.next.gates.acceptance.confirmed_by.filter((c) => c.by === REQ_OWNER).length, 1)
 })
 
 test('satisfyGate 第一步：门禁列了名单，名单外的人（哪怕是需求负责人）不能点头', () => {

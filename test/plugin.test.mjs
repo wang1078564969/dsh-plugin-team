@@ -710,3 +710,53 @@ test('转派会重置门禁并释放旧租约（"新执行者仍需点接受"不
     ledger.cleanup()
   }
 })
+
+test('需求负责人总能验收（哪怕他不是任何角色域的负责人）', async () => {
+  /*
+   * 设计 00 §5.1："多人协作由主 owner 确认"。可验收人名单以前只算"任务跨越的域负责人
+   * + pm"，于是**需求负责人自己反而点不动**自己需求下的验收 —— 除非他碰巧还兼着某个域
+   * 或 pm。一个人不能验收自己的需求，这不是设计要的。
+   */
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-team-acceptor-'))
+  const config = loadConfig({
+    dataDir: dir,
+    workspace: join(dir, 'ws'),
+    tickIntervalMs: 0,
+    // 需求负责人 human:pm1 既不是 development 域的负责人，也不是 pm 域的成员。
+    members: { pm: ['human:someone-else'], requirement: ['human:pm1'], development: ['human:dev'] },
+  })
+  const agents = {
+    get: () => undefined,
+    async create(options) {
+      return { agent: new FakeAgent(options.sessionId), dispose: async () => {} }
+    },
+    async resume() {
+      throw new Error('no such session')
+    },
+  }
+  const ctx = { get: (name) => (name === 'agents' ? agents : undefined), effect: (factory) => factory() }
+  const store = new Store(dir).load()
+  const pool = new SessionPool(ctx, config)
+  const handlers = createHandlers({ ctx, config, store, pool })
+  try {
+    const req = handlers.create_requirement({ title: '验收人', owner: 'human:pm1', problem: 'p' })
+    handlers.confirm_requirement({ id: req.id, actor: 'human:pm1' })
+    const proposed = handlers.propose_tasks({ id: req.id, tasks: [{ title: 'T', assignee: 'bot:dev', domains: ['development'] }] })
+    handlers.confirm_split({ id: req.id, actor: 'human:pm1' })
+    const taskId = proposed.tasks[0].id
+    const ran = await handlers.run_task({ id: taskId })
+    assert.equal(ran.ok, true, JSON.stringify(ran))
+
+    // 先确认"跟这事无关的人"依然不能点头（任务还在 in_review 时）
+    const outsider = handlers.verify_task({ id: taskId, actor: 'human:nobody' })
+    assert.equal(outsider.ok, false)
+    assert.equal(outsider.code, 'forbidden')
+
+    const verified = handlers.verify_task({ id: taskId, actor: 'human:pm1' })
+    assert.equal(verified.ok, true, JSON.stringify(verified))
+    assert.equal(verified.state, 'done')
+  } finally {
+    pool.dispose()
+    rmSync(dir, { recursive: true, force: true })
+  }
+})

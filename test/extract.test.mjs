@@ -322,16 +322,22 @@ test('重复识别：同一诉求短时间内反复出现 → 命中已有需求
 test('重复识别的判据逐字保留：仓库命中加 0.1，阈值可调，取分数最高的一条', () => {
   const d = (title, repos) => ({ title, problem: '', proposal: '', acceptance_criteria: [], priority: 'P2', repos, requester: null, excerpts: [], source_message_ids: [] })
 
-  // 文本相似度 0.5（无前缀命中）→ 不加权时低于默认阈值 0.6
-  const draft = d('支付失败要能自动重试', ['pay-service'])
-  assert.equal(similarity(draft.title, '订单支付失败自动重试'), 0.5)
+  /*
+   * 文本相似度 0.545（无前缀命中）→ 不加权时低于默认阈值 0.6。
+   *
+   * 注：`similarity` 现在只剔语气客套（不剔"支持/需要"这类内容词），所以这里的
+   * 具体数字与 hub 不同 —— 判据本身（前缀命中 + 加权相似度 + 同仓库）逐字未变，
+   * 变的是"改写过的同一件事"能不能被认出来（hub 那版对改写给 0 分）。
+   */
+  const draft = d('支付失败要自动重试', ['pay-service'])
+  assert.equal(Math.round(similarity(draft.title, '订单支付失败自动重试') * 1000) / 1000, 0.545)
   assert.equal(prefixOverlap(draft.title, '订单支付失败自动重试'), 0)
   assert.equal(findDuplicate(draft, [existing('req-1', '订单支付失败自动重试')]), null)
 
-  // 同仓库 → +0.1 → 刚好过 0.6
+  // 同仓库 → +0.1 → 过了 0.6
   const withRepo = findDuplicate(draft, [existing('req-1', '订单支付失败自动重试', ['pay-service'])])
   assert.equal(withRepo?.id, 'req-1')
-  assert.equal(withRepo.score, 0.6)
+  assert.equal(Math.round(withRepo.score * 1000) / 1000, 0.645)
 
   // 阈值可调：抬高到 0.7 就不再算重复
   assert.equal(findDuplicate(draft, [existing('req-1', '订单支付失败自动重试', ['pay-service'])], 0.7), null)
@@ -339,7 +345,7 @@ test('重复识别的判据逐字保留：仓库命中加 0.1，阈值可调，�
   // 多条都命中时取分数最高的那条（prefixOverlap 命中直接给到 1）
   const best = findDuplicate(draft, [
     existing('req-1', '订单支付失败自动重试', ['pay-service']),
-    existing('req-2', '支付失败要能自动重试功能', ['pay-service']),
+    existing('req-2', '支付失败要自动重试机制', ['pay-service']),
   ])
   assert.equal(best?.id, 'req-2')
   assert.equal(best.score, 1)
