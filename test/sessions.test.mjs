@@ -8,7 +8,16 @@ import { join } from 'node:path'
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { botSessionId, botSessionKey, botSessionsOf, createReplyLease, ensureBotSession, isBotSessionId, sessionRows } from '../lib/sessions.js'
+import {
+  botSessionId,
+  botSessionKey,
+  botSessionsOf,
+  createReplyLease,
+  ensureBotSession,
+  isBotSessionId,
+  migrateLegacySessions,
+  sessionRows,
+} from '../lib/sessions.js'
 import { Store } from '../lib/store.js'
 
 function makeStore() {
@@ -100,25 +109,51 @@ test('the lease snapshot is what 接入自检 shows', () => {
   assert.deepEqual(lease.snapshot(), [])
 })
 
-test('the first bot to serve a chat takes over its single-assistant conversation', () => {
+test('每个机器人每个群一条自己的会话：单助手时代那条不再被继承', () => {
+  /*
+   * 用户 2026-09-12 的要求：**一个群里每台机器人都是单独的会话，不是一个群共用一个**。
+   *
+   * 以前这里有一条"第一个服务这个群的机器人继承 `team-feishu-<群>`"的规则，出发点是
+   * "别让名册把群聊过什么弄丢"。但它的画面恰好是用户反对的那一个：会话 id 还是群的名字，
+   * 看起来这个群只有一条会话。现在一律 `team-bot-<机器人>-<群>`，历史那条由
+   * `migrateLegacySessions()` 一次性改名。
+   */
   const world = makeStore()
   try {
-    // The chat was answered by the pre-roster assistant, from `team-feishu-…`.
+    // 这个群以前被单助手时代的会话回答过（`team-feishu-…`）。
     world.store.put('chat', { id: 'oc_a', chat_type: 'group', app_id: 'cli_x', session_id: 'team-feishu-oc_a', bot_id: null })
-    const adopted = ensureBotSession(world.store, { botId: 'req', chatId: 'oc_a', chatType: 'group' })
-    assert.equal(adopted.session_id, 'team-feishu-oc_a', 'the bot continues what the group already discussed')
-    assert.equal(adopted.adopted_from, 'team-feishu-oc_a')
 
-    // A SECOND bot in the same chat gets its own conversation: two bots sharing one
-    // session is the confusion the pair key exists to remove.
+    const first = ensureBotSession(world.store, { botId: 'req', chatId: 'oc_a', chatType: 'group' })
+    assert.equal(first.session_id, 'team-bot-req-oc_a', '不继承：会话 id 说清是谁的')
+
     const second = ensureBotSession(world.store, { botId: 'dev', chatId: 'oc_a', chatType: 'group' })
-    assert.equal(second.session_id, 'team-bot-dev-oc_a')
-    assert.equal(second.adopted_from, null)
+    assert.equal(second.session_id, 'team-bot-dev-oc_a', '同一个群里第二台机器人是另一条会话')
 
-    // And a chat that never had one starts fresh, under the bot's own namespace.
-    const fresh = ensureBotSession(world.store, { botId: 'req', chatId: 'oc_b' })
-    assert.equal(fresh.session_id, 'team-bot-req-oc_b')
-    assert.equal(fresh.adopted_from, null)
+    // 同一个机器人在两个群也是两条。
+    assert.equal(ensureBotSession(world.store, { botId: 'req', chatId: 'oc_b' }).session_id, 'team-bot-req-oc_b')
+  } finally {
+    world.cleanup()
+  }
+})
+
+test('历史会话改名：只动单助手时代的 id，记下从哪来，且幂等', () => {
+  const world = makeStore()
+  try {
+    world.store.put('botsession', { id: 'req.oc_a', bot_id: 'req', chat_id: 'oc_a', session_id: 'team-feishu-oc_a', turns: 4, seen: 3 })
+    world.store.put('botsession', { id: 'dev.oc_b', bot_id: 'dev', chat_id: 'oc_b', session_id: 'team-bot-dev-oc_b' })
+
+    const migrated = migrateLegacySessions(world.store)
+    assert.equal(migrated.length, 1, '只有那一条老的会被动')
+    assert.equal(migrated[0].from, 'team-feishu-oc_a')
+    assert.equal(migrated[0].to, 'team-bot-req-oc_a')
+
+    const after = world.store.get('botsession', 'req.oc_a')
+    assert.equal(after.session_id, 'team-bot-req-oc_a')
+    assert.equal(after.migrated_from, 'team-feishu-oc_a', '从哪来要留着：换 id 等于换了 DSH 会话')
+    assert.equal(after.turns, 4, '计数器一个都不动')
+    assert.equal(world.store.get('botsession', 'dev.oc_b').session_id, 'team-bot-dev-oc_b', '已经是新 id 的不碰')
+
+    assert.deepEqual(migrateLegacySessions(world.store), [], '再跑一次什么都不做')
   } finally {
     world.cleanup()
   }

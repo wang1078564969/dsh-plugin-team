@@ -175,3 +175,78 @@ test('控制器：被点名的应用定归属，群的应用身份不再随"谁�
     rmSync(dir, { recursive: true, force: true })
   }
 })
+
+test('一个群里每台机器人各有一条自己的会话记录 —— 不必等它开口', async () => {
+  /*
+   * 用户 2026-09-12 的要求：**"同一个群里有多个机器人，每个机器人都是单独的会话，
+   * 不是一个群共用一个会话"**。
+   *
+   * 会话键本来就是"机器人 × 群"，但"有没有会话"在台账和侧栏上是**看得见的** ——
+   * 记录若要等它第一次回答才建，画面就是"群里两台机器人、会话页只有一台"，
+   * 和"共用一个会话"一样容易被误读。所以只要有**证据**说明这台机器人在这个群里
+   * （这个应用收到过消息，或这条消息 @ 到了这个应用），就把它的会话记录建出来。
+   *
+   * 「证据」两个字是硬的：不按"名册里有谁"凭空建，也不猜。
+   */
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-team-conversations-'))
+  const team = await import('../lib/team.js')
+  const ctx = fakeCtx()
+  try {
+    await team.apply(ctx, {
+      dataDir: dir,
+      workspace: join(dir, 'ws'),
+      tickIntervalMs: 0,
+      bots: [
+        { id: 'req', displayName: '需求机器人', role: 'req', enabled: true, feishu: { appId: 'cli_req' } },
+        { id: 'dev', displayName: '个人网银前端', role: 'dev', enabled: true, feishu: { appId: 'cli_dev' } },
+        { id: 'ops', displayName: '运维机器人', role: 'ops', enabled: false, feishu: { appId: 'cli_dev' } },
+      ],
+      feishu: { mode: 'off', appId: 'cli_req', appSecret: 's', apps: { cli_dev: { appSecret: 's2' } }, botOpenId: REQ_OPEN_ID },
+    })
+    const controller = team.feishuSeam
+    controller.state.connectionPool = {
+      botOpenIdFor: (appId) => (appId === 'cli_dev' ? DEV_OPEN_ID : appId === 'cli_req' ? REQ_OPEN_ID : ''),
+      online: () => 2,
+      reports: () => [],
+    }
+    const event = (messageId, appId, mentions) => ({
+      __appId: appId,
+      event_id: 'ev_' + messageId,
+      sender: { sender_id: { open_id: 'ou_wang' }, sender_type: 'user' },
+      message: {
+        chat_id: 'oc_hub',
+        chat_type: 'group',
+        message_id: messageId,
+        message_type: 'text',
+        content: JSON.stringify({ text: '看下这个' }),
+        mentions,
+        create_time: String(Date.now()),
+      },
+    })
+
+    // ① 一条只从需求机器人的应用来、谁也没 @ 的消息：只登记**它**的会话（不猜别人）。
+    await controller.handleInbound(event('om_1', 'cli_req', []))
+    assert.deepEqual(
+      controller.store.all('botsession').map((one) => one.session_id).sort(),
+      ['team-bot-req-oc_hub'],
+      '只有证据（这个应用收到了消息）指向的那台机器人有会话',
+    )
+
+    // ② 一条 @ 了开发机器人的消息：即使它从需求机器人的连接来，开发机器人也有自己的会话。
+    await controller.handleInbound(
+      event('om_2', 'cli_req', [{ key: '@_user_1', id: { open_id: DEV_OPEN_ID }, name: '个人网银前端' }]),
+    )
+    assert.deepEqual(
+      controller.store.all('botsession').map((one) => one.session_id).sort(),
+      ['team-bot-dev-oc_hub', 'team-bot-req-oc_hub'],
+      '同一个群里两台机器人 = 两条会话，id 各说清是谁的',
+    )
+    const dev = controller.store.get('botsession', 'dev.oc_hub')
+    assert.equal(dev.turns, 0, '它还没开口，但会话已登记（真正能跑的会话在第一次回答时打开）')
+    assert.equal(controller.store.get('botsession', 'req.oc_hub').seen, 2, '记录仍然记在主机器人名下')
+    assert.equal(controller.store.get('botsession', 'ops.oc_hub'), null, '没启用的机器人不登记')
+  } finally {
+    for (const disposer of ctx.effects) if (typeof disposer === 'function') disposer()
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
