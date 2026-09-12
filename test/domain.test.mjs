@@ -39,6 +39,7 @@ import {
   isHuman,
   leaseIdOf,
   leaseVerdict,
+  noticeLeaseExpiry,
   openLease,
   parseCallbackRecord,
   parseConflict,
@@ -52,6 +53,7 @@ import {
   remainingMs,
   renewLease,
   requirementComplete,
+  returnLease,
   scanDue,
   transitionRequirement,
   transitionTask,
@@ -1138,6 +1140,7 @@ test('parseTask 默认值：逐条对齐 schema.ts（含 gate 的六项默认）
 test('parseGate / parseLease / parseDecision … 的默认值一条不落', () => {
   assert.deepEqual(parseGate({}), {
     required_by: [],
+    stand_ins: [],
     confirmed_by: [],
     due_at: null,
     not_applicable: false,
@@ -1427,6 +1430,36 @@ test('openLease：人在接受那一刻起租 2 天，机器人 1 小时', () =>
   assert.equal(role.kind, 'bot', 'role: 也算机器人侧')
   assert.deepEqual(DEFAULT_LEASE_POLICY, { lease_days: 2, lease_grace_days: 1, bot_lease_hours: 1 })
   assert.equal(leaseIdOf('task-8891'), 'task-8891')
+})
+
+test('租约的去向只能由领域函数写（R5.7）：过期播报计数 +1、收回进终态', () => {
+  /*
+   * 以前这四种写法散在 `tools.js` 里手写对象字面量，于是"哪种原因配哪种状态"
+   * 只在调用点成立。收进领域函数之后，这里钉住语义，`test/invariants.test.mjs`
+   * 钉住"不许再手写"。
+   */
+  const lease = { ...openLease(fixture('accepted'), DEV, DEFAULT_LEASE_POLICY, NOW), state: 'active', expiry_notices: 0 }
+
+  const noticed = noticeLeaseExpiry(lease)
+  assert.equal(noticed.state, 'expired', '过期播报是"已喊过、还在宽限期"的中间态，不是终态')
+  assert.equal(noticed.expiry_notices, 1, '计数要 +1，否则每个 tick 都会再喊一遍')
+  assert.equal(noticeLeaseExpiry(noticed).expiry_notices, 2, '再观察到一次就再 +1')
+
+  const back = returnLease(lease, 'returned')
+  assert.equal(back.state, 'returned')
+  assert.equal(back.release_reason, 'returned')
+
+  const reclaimed = returnLease(lease, 'expired')
+  assert.equal(reclaimed.state, 'returned', '宽限期满收回：进终态，不是留在 expired')
+  assert.equal(reclaimed.release_reason, 'expired', '原因照实写，人才能回答"它为什么回到待派发"')
+
+  const released = releaseLease(lease, 'reassigned').lease
+  assert.equal(released.state, 'released')
+  assert.equal(released.release_reason, 'reassigned')
+
+  // 纯函数：输入不被就地改（原对象还是 active）
+  assert.equal(lease.state, 'active')
+  assert.equal(lease.expiry_notices, 0)
 })
 
 test('renewLease：只有持有人本人能续；续约是一次“重新承诺”', () => {

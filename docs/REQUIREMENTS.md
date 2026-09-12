@@ -73,7 +73,7 @@
 | R1.2 | **按 `event_id` 去重**（没有才退回 `message_id`），判重在一切副作用之前；保留窗口可配 | 重投同一事件不产生第二条需求、第二张卡、第二份资产 | ✅ | `lib/feishu/ingest.js` 的 `Inbox`、`test/feishu.test.mjs`、`test/inbound.test.mjs` |
 | R1.3 | 收到消息**先表态**（reaction），范围与 emoji 可配；失败只记日志 | 表态发生且不影响后续处理；关掉它不影响其它行为 | ✅ | `lib/team.js`、`test/reaction.test.mjs` |
 | R1.4 | 非文本入站：富文本 `post` → markdown；图片/文件落库并给 `asset://` 引用 + 回执 | 带排版的说明不丢失；下载失败**不给引用** | 🟡 | `lib/feishu/connection.js`、`lib/feishu/richtext.js`、`lib/assets.js`；**语音/转发合并/表情回应/撤回未做** |
-| R1.5 | 群准入：可配白名单，**写了白名单就生效**；判定发生在副作用之前 | 未登记群的消息不进台账、不建对象 | 🟡 | `lib/bots.js` 的 `isRegisteredChat`/`admissionRequired`；⚠️ 现在判定在去重落库**之后** |
+| R1.5 | 群准入：可配白名单，**写了白名单就生效**；判定发生在副作用之前 | 未登记群的消息不进台账、不建对象 | ✅ | `lib/bots.js` 的 `isRegisteredChat`/`admissionRequired`；位置在 `inbox.claim()` **之前**（`lib/team.js`），`test/invariants.test.mjs` 用「登记之后同一条消息仍能进流水线」钉住 |
 | R1.6 | 群记录与**主机器人**：每条消息记在主机器人名下；退群要留痕 | 面板能回答"这个群归谁记"；被移出群后能看出机器人已不在群里 | ✅ | `lib/sessions.js`、`lib/bots.js` 的 `pickPrimaryBot`、`test/primary-bot.test.mjs` |
 | R1.7 | **会话身份 = 机器人 × 群**；单助手时代的会话要一次性迁移并留痕 | 两台机器人同群各有自己的会话；旧 id 迁移后仍可追 | ✅ | `lib/sessions.js` 的 `migrateLegacySessions`、`test/sessions.test.mjs` |
 
@@ -117,8 +117,8 @@
 | R5.3 | "已接受未开始"超时**自动释放**（有上限），"未接受"超时**只催办升级** | 释放次数可见；同一任务不会无限轮回 | ✅ | `lib/domain/scheduler.js` 的 `dueAction`、`release_count` |
 | R5.4 | 改派/交回时**必须重算门禁确认人** | 机器人拒绝后改派给真人，真人仍要接受且会超时催办 | ✅ | `gatesForAssignee()`、`test/round1-fixes.test.mjs` |
 | R5.5 | 租约字段齐全：释放原因、过期播报次数；宽限期内**第一次观察到必播报** | 任务"突然回到待接受"能回答为什么 | ✅ | `lib/domain/lease.js` 的 `release_reason`/`expiry_notices` |
-| R5.6 | 代确认必须在卡上写明"由谁代" | 域里没人时卡片显示代确认者 | ❌ | 回落有，卡上不写"代" |
-| R5.7 | 租约状态只能由领域函数改（现在是 `tools.js` 手写 `store.put('lease',…)`） | 只有一条写法，语义不会分叉 | ❌ | `releaseLease()` 无生产调用点（重构项） |
+| R5.6 | 代确认必须在卡上写明"由谁代" | 域里没人时卡片显示代确认者 | ✅ | `Gate.stand_ins`（建任务时冻结：`lib/domain/schema.js`/`objects.js`、`lib/tools.js` 的 `acceptanceConfirmers`）+ `taskConfirmLine` 渲染「@X 代确认」/「（@X 代）」；`test/plugin.test.mjs`、`test/broadcast.test.mjs` |
+| R5.7 | 租约状态只能由领域函数改 | 只有一条写法，语义不会分叉 | ✅ | `lib/domain/lease.js` 的 `releaseLease`/`returnLease`/`noticeLeaseExpiry` 是唯三构造点；`test/invariants.test.mjs` 扫源码禁止手写租约对象，`test/domain.test.mjs` 钉语义 |
 
 ### R6 执行：任务真的被跑掉
 
@@ -142,7 +142,7 @@
 | R7.4 | 聚合与节流：2 秒窗口、digest 摘要、@人配额、发言占比告警 | 机器人不会变成噪音源 | ✅ | `lib/feishu/broadcast.js`、`lib/metrics.js` |
 | R7.5 | 日报：摘要桶 + 现算"在等谁确认"，时刻可配（`-1` 关） | 一天结束时人能看到该看的 | ✅ | `lib/notify.js` 的 `report`、`feishu.dailyReportHour` |
 | R7.6 | 需求卡 / 会话回答 / 入站回复也走原地更新 | 一个需求从建单到完成只有一张卡 | ❌ | 只有任务卡走 PATCH |
-| R7.7 | "卡住"要带等待时长（"等接受（已等 3 小时）"） | 慢与死能区分 | 🟡 | CI 与租约有；门禁没有 |
+| R7.7 | "卡住"要带等待时长（"等接受（已等 3 小时）"） | 慢与死能区分 | ✅ | `taskConfirmLine` 用「进入当前状态的那一刻」算 `已等 X`（`stateSinceOf`）；没有历史就不写，不谎报；`test/broadcast.test.mjs` |
 | R7.8 | 通知回填：人不在时错过的确认，回来能补一份待办汇总 | 离开两小时回来知道期间发生了什么 | ❌ | 无 `backfill` |
 | R7.9 | `notify_window`：窗口外的催办推迟到窗口开始 | 凌晨不会把人叫醒 | ❌ | 全库无此键 |
 | R7.10 | 决策卡（决策需要人拍板时在群里出现） | 决策有载体 | ❌ | `buildDecisionCard` 零调用点 |
@@ -174,7 +174,7 @@
 | R10.1 | 文档库目录规范 + **frontmatter 硬要求**（缺字段一个字节都不写） | 没有 owner 的文档进不了库 | ✅ | `lib/docs.js`、`test/docs.test.mjs` |
 | R10.2 | 索引可重建（`docs/index.md` + `_meta/docs.json` 都是派生物） | 删掉索引不会丢内容 | ✅ | `lib/docs.js` 的 `rebuildIndex` |
 | R10.3 | 陈旧检测：双向引用图 + 天数阈值；**只报告不自动改状态** | 引用了被取代文档的会被点出来 | ✅ | `lib/docs.js` 的 `staleReport`、`docs op=stale` |
-| R10.4 | 机器人沉淀知识默认落**草稿**，人确认后才生效 | 幻觉不会直接进主副本 | 🟡 | `remember` 默认 `status: draft`；**没有"确认转 active"的动作** |
+| R10.4 | 机器人沉淀知识默认落**草稿**，人确认后才生效 | 幻觉不会直接进主副本 | ✅ | `remember` 默认 `status: draft`；`docs op=confirm`（`lib/docs.js` 的 `confirm`）只从 draft 出发、必须有确认人、写 `confirmed_by`/`confirmed_at` 且不动正文；`test/docs.test.mjs` |
 | R10.5 | 回忆一次查三个来源（文档 + DSH 会话历史 + 台账），每条带出处；**查不到就说查不到** | 缺 `sessionQuery` 时如实说明；过期文档照样返回并标注 | ✅ | `lib/recall.js`、`test/plugin.test.mjs` |
 | R10.6 | 需求对象的只读视图可被渲染进文档库 | 新人能从文档库读到需求 | ❌ | 类型与校验在，无自动渲染 |
 | R10.7 | 云文档镜像（`mirror: feishu`） | 手机上能读 | ⛔ | 无 API 调用；见 §4 |

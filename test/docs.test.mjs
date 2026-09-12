@@ -147,6 +147,48 @@ test('写入：按类型落目录、缺字段一个字节都不写、更新不�
   }
 })
 
+test('草稿要人点头才转正：必须有确认人、只从 draft 出发、正文不动（R10.4）', () => {
+  /*
+   * 机器人沉淀的知识默认落 `draft`（"幻觉不该直接进主副本"）。但一份永远转不了正的
+   * 草稿等于没有沉淀 —— 这条钉住那个动作的三条边界：谁点头、从哪出发、动什么。
+   */
+  const world = makeWorld()
+  try {
+    const written = world.store.write({ id: 'note-retry', type: 'note', title: '重试策略的结论', owner: 'bot:req', body: '三次指数退避，上限 30s' })
+    assert.equal(written.ok, true)
+    assert.equal(world.store.read('note-retry').status, 'draft')
+
+    // 没有确认人：拒绝，而且是"一个字节都不写"的那一档
+    const noOne = world.store.confirm('note-retry', {})
+    assert.equal(noOne.ok, false)
+    assert.equal(noOne.code, 'bad_request')
+    assert.equal(world.store.read('note-retry').status, 'draft')
+
+    const done = world.store.confirm('note-retry', { by: 'human:pm1' })
+    assert.equal(done.ok, true, JSON.stringify(done))
+    const doc = world.store.read('note-retry')
+    assert.equal(doc.status, 'active')
+    assert.equal(doc.frontmatter.confirmed_by, 'human:pm1', '谁点头的要写下来')
+    assert.equal(doc.frontmatter.confirmed_at, doc.frontmatter.updated)
+    assert.equal(doc.body.trim(), '三次指数退避，上限 30s', '确认是元数据动作，正文一个字都不动')
+
+    // 已经转正的再来一次：说清"现在是什么状态"，而不是悄悄再写一遍
+    const again = world.store.confirm('note-retry', { by: 'human:pm1' })
+    assert.equal(again.ok, false)
+    assert.equal(again.code, 'invalid_state')
+    assert.match(again.message, /active/)
+
+    // 不存在的文档
+    assert.equal(world.store.confirm('note-nope', { by: 'human:pm1' }).code, 'not_found')
+
+    // 索引能跟上（status 变了，index.md 里那份也变）
+    world.store.rebuildIndex()
+    assert.match(readFileSync(join(world.workspace, 'docs', 'index.md'), 'utf8'), /note-retry/)
+  } finally {
+    world.cleanup()
+  }
+})
+
 test('索引可重建：index.md 与 _meta/docs.json 都从 frontmatter 现算', () => {
   const world = makeWorld()
   try {
@@ -344,6 +386,16 @@ test('工具动作：docs 写/读/索引/陈旧，remember 默认落 draft，rec
     assert.equal(handlers.docs({ op: 'index' }).ok, true)
     assert.equal(handlers.docs({ op: 'stale' }).rows.length, 0)
     assert.equal(handlers.docs({ op: 'nonsense' }).code, 'bad_request')
+
+    /*
+     * 草稿转正（R10.4）也走工具：谁点头必须写清（actor），
+     * 因为它是**写动作**，不跟读动作共用"谁都能调"那一档。
+     */
+    assert.equal(handlers.docs({ op: 'confirm', id: 'adr-2026-009' }).code, 'bad_request')
+    const confirmed = handlers.docs({ op: 'confirm', id: 'adr-2026-009', actor: 'human:a' })
+    assert.equal(confirmed.ok, true, JSON.stringify(confirmed))
+    assert.equal(handlers.docs({ op: 'read', id: 'adr-2026-009' }).frontmatter.status, 'active')
+    assert.equal(handlers.docs({ op: 'confirm', id: 'adr-2026-009', actor: 'human:a' }).code, 'invalid_state')
 
     // remember：中文标题没有 slug 时也要生成合法 id，且默认 draft（人点头才算数）。
     const remembered = handlers.remember({ title: '发布流程要先跑单测', body: '约定：合并前必须绿。', owner: 'human:a', type: 'convention' })

@@ -383,6 +383,49 @@ test('确认行显示各方进度与待确认人（跨域任务的关键信息�
   assert.ok(line?.includes('待验收'))
 })
 
+test('门禁等待时长：慢和死要能分开（R7.7）', () => {
+  const base = makeTask('assigned')
+  const task = {
+    ...base,
+    history: [{ from: 'confirmed', to: 'assigned', by: REQ_OWNER, at: new Date(Date.now() - 3 * 3600_000).toISOString(), effects: [] }],
+  }
+  const line = taskConfirmLine(task, { now: new Date() })
+  assert.ok(line?.includes('已等 3 小时'), line ?? '')
+
+  /*
+   * 没有历史（旧数据、或还没跃迁过）时**不编一个时长出来** —— 与 footer 里
+   * "provider 不上报就不写 0"是同一条规矩：看不出快慢，好过看错快慢。
+   */
+  assert.ok(!String(taskConfirmLine(base) ?? '').includes('已等'), '没有起点就不写"已等"')
+})
+
+test('代确认要在卡上写明"代"：那个域没人时顶上的人不是域负责人（R5.6）', () => {
+  /*
+   * 域里一个人都没有时，验收门禁会把配置里的 `domainFallbacks[域]` 拉进来顶替。
+   * 卡上不写那个"代"字，`@backup` 看上去就是那个域的负责人 ——
+   * 而"谁替谁签的字"正是出事后第一个要回答的问题。
+   */
+  const withStandIn = makeGate([REQ_OWNER, 'human:backup'])
+  withStandIn.stand_ins = ['human:backup']
+  const task = { ...makeTask('assigned'), owner: REQ_OWNER, gates: { ...makeGates('assigned', 'human:zhao-dev'), acceptance: withStandIn } }
+  const line = taskConfirmLine(task)
+  assert.ok(line?.includes('@backup 代确认'), line ?? '')
+
+  // 代确认者点过头之后，已确认那一行也要写出"代"
+  const satisfied = {
+    ...task,
+    gates: {
+      ...task.gates,
+      acceptance: { ...withStandIn, confirmed_by: [{ by: REQ_OWNER, at: NOW.toISOString() }, { by: 'human:backup', at: NOW.toISOString() }] },
+    },
+  }
+  assert.ok(taskConfirmLine(satisfied)?.includes('@backup 代'), taskConfirmLine(satisfied) ?? '')
+
+  // 机器人承接（not_applicable）的门禁没有替身，不该冒出"代"字
+  const botTask = { ...makeTask('assigned', 'bot:dev'), owner: REQ_OWNER, gates: makeGates('assigned', 'bot:dev') }
+  assert.ok(!String(taskConfirmLine(botTask) ?? '').includes('代确认'), '机器人承接的门禁不写代确认')
+})
+
 test('有证据时任务卡列出证据，没有时不显示空段', () => {
   const withEvidence = { ...makeTask('in_review'), evidence: [{ kind: 'test', ref: 'pytest://x' }] }
   const card = buildTaskCard(withEvidence, ctx)

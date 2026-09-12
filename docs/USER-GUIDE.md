@@ -320,8 +320,10 @@ node ~/.dsh/profiles/web/plugins/inventory-check.cjs /tmp/tree.yml
 team docs op=init
 # 写一份文档：**frontmatter 是硬要求**（缺 owner 之类的必填字段一个字节都不写）
 team docs op=write id=adr-2026-009 type=decision title=记忆不建库 owner=human:pm body="…"
-# 沉淀一条结论（默认落 draft，等人确认后改 active）
+# 沉淀一条结论（默认落 draft）
 team remember title="发布流程要先跑单测" body="约定：合并前必须绿" owner=human:pm
+# 人点头：草稿转正（draft → active）。必须有 actor，正文一个字都不动
+team docs op=confirm id=note-xxx actor=human:pm
 # 重建索引（index.md 与 _meta/docs.json 都是**派生物**，手改会被覆盖）
 team docs op=index
 # 谁过期了

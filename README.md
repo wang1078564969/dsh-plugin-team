@@ -330,7 +330,8 @@ workspace/
 |---|---|---|
 | 建库 | `docs op=init` | 按目录规范建齐，并写出第一份 `index.md` |
 | 写文档 | `docs op=write id=… type=… title=… owner=… body=…` | **frontmatter 是硬要求**：缺 `owner` 之类的必填字段会被拒，一个字节都不写 |
-| 沉淀结论 | `remember title=… body=…` | 默认落 `status: draft`（涉及人/流程的判断要人点头，设计 07 §1.2），确认后改 `active` |
+| 沉淀结论 | `remember title=… body=…` | 默认落 `status: draft`（涉及人/流程的判断要人点头，设计 07 §1.2） |
+| 草稿转正 | `docs op=confirm id=… actor=…` | `draft → active`：**必须有确认人**，写 `confirmed_by`/`confirmed_at`，**正文一个字都不动**；已经 active 的再确认会被 `invalid_state` 拒掉 |
 | 重建索引 | `docs op=index` | `index.md` 与 `_meta/docs.json` 都是派生物，坏了重建即可 |
 | 看谁过期了 | `docs op=stale` | 引用了已被取代的文档、或 `active` 但 180 天没更新，都会带着原因列出来 |
 | 回忆 | `recall query=…` | 同时查**文档**、**DSH 会话历史**（`ctx.sessionQuery`，FTS5）与**台账**；每条都带出处，查不到的那一半会明说 |

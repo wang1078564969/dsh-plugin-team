@@ -831,6 +831,43 @@ test('任务类型决定谁进确认名单（跨域任务是多个确认人）',
   }
 })
 
+test('域里没人时由 fallback 顶上，并且记成"代确认"（R5.6）', async () => {
+  /*
+   * "域里没人"不等于这道门禁可以悄悄过：配置里写了 `domainFallbacks[域]` 就由它顶上。
+   * 但顶上的人和本域负责人不是一回事 —— 卡片要能写出"代"字（见 `taskConfirmLine`），
+   * 所以建任务时就得把"谁是替身"冻结进门禁。
+   */
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-team-standin-'))
+  const config = loadConfig({
+    dataDir: dir,
+    workspace: join(dir, 'ws'),
+    tickIntervalMs: 0,
+    members: { requirement: ['human:pm1'], development: ['human:dev'], testing: [] },
+    domainFallbacks: { testing: 'human:qa-lead' },
+  })
+  const store = new Store(dir).load()
+  const handlers = createHandlers({
+    ctx: { get: () => undefined, effect: (factory) => factory() },
+    config,
+    store,
+    pool: { open: async () => {}, drive: async () => ({}) },
+  })
+  try {
+    const req = handlers.create_requirement({ title: '测试域没人', owner: 'human:pm1', problem: 'p' })
+    handlers.confirm_requirement({ id: req.id, actor: 'human:pm1' })
+    const proposed = handlers.propose_tasks({ id: req.id, tasks: [{ title: 'T', type: 'feature_delivery', assignee: 'bot:dev' }] })
+    const task = store.get('task', proposed.tasks[0].id)
+    assert.deepEqual(task.domains, ['development', 'testing'])
+    assert.ok(task.gates.acceptance.required_by.includes('human:qa-lead'), '空域由 fallback 顶上')
+    assert.deepEqual(task.gates.acceptance.stand_ins, ['human:qa-lead'], '替身要标出来，否则卡片分不清它是谁')
+    assert.ok(!task.gates.acceptance.stand_ins.includes('human:dev'), '本域负责人不是替身')
+    // 重新读一遍（走 schema 校验）也还在：它是门禁的一部分，不是内存里的临时标记
+    assert.deepEqual(store.get('task', task.id).gates.acceptance.stand_ins, ['human:qa-lead'])
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
 test('成员表真的拦人：观察者只读、停用的要走代理、canApprove 是白名单', async () => {
   /*
    * 设计 02 §2 + 05 §3.2 的三档权限。以前成员表的 `role` 与 `canApprove`
