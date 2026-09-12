@@ -310,7 +310,15 @@ test('the answer goes out through the app the BOT speaks on, not the default one
   }
 })
 
-test('a bot on another app is not a candidate for this event', async () => {
+test('正文里写了另一台机器人的名字，不足以把它拉进来', async () => {
+  /*
+   * 这条规矩是有意的：`@开发机器人` 出现在**正文**里，但它不是一次结构化的 @
+   * （事件里没有 `mentions`，也就没有 open_id）。只凭正文里的字面名字就让另一台机器人
+   * 抢答，等于"机器人自己猜你叫的是它"—— 与"机器人打断人"没法区分。
+   *
+   * 真正被 @ 到的那种情况单独有用例（下面两条）：那时事件里有 open_id，
+   * 由 `mentionedAppIds` 带上来，结论是确定的。
+   */
   const world = makeWorld({
     bots: [
       { id: 'req', displayName: '需求机器人', role: 'req', enabled: true },
@@ -320,10 +328,70 @@ test('a bot on another app is not a candidate for this event', async () => {
   try {
     const result = await world.responder.onMessage(message({ appId: 'cli_one' }))
     assert.equal(result.botId, 'req')
-    // The dev bot is named, but it is not on the app this event arrived on: it
-    // cannot have been the one addressed.
     const named = await world.responder.onMessage(message({ messageId: 'om_2', appId: 'cli_one', text: '@开发机器人 在吗' }))
-    assert.equal(named.botId, 'req')
+    assert.equal(named.botId, 'req', '正文里的名字不算身份证据')
+  } finally {
+    world.cleanup()
+  }
+})
+
+test('被真正 @ 到的那台机器人，即使事件是从另一个应用的连接来的，也由它回答', async () => {
+  /*
+   * 用户 2026-09-12 的场景：一个群里两台机器人（各自一个应用）。同一个群消息会在
+   * **两条连接上各到一次**，去重只放先到的那一条过去 —— 于是"事件从哪个应用来"是竞态，
+   * 而"@ 到了谁"是事实（`mentions[].id.open_id`）。
+   *
+   * 以前只按"事件从哪来"过滤候选，于是 @ 了开发机器人、而需求机器人的连接先到，
+   * 候选里根本没有开发机器人 → **没人回答**，而且时灵时不灵。现在按身份先把被点名的那台
+   * 排进候选并排在第一位。
+   */
+  const world = makeWorld({
+    bots: [
+      { id: 'req', displayName: '需求机器人', role: 'req', enabled: true },
+      { id: 'dev', displayName: '个人网银前端', role: 'dev', enabled: true, feishu: { appId: 'cli_two' } },
+    ],
+  })
+  try {
+    /*
+     * 事件落在 `cli_one`（需求机器人的应用）上，但 `mentions` 里是开发机器人的 open_id ——
+     * 这正是 `lib/team.js` 的 `mentionedAppsOf` 会算出 `['cli_two']` 的情形。
+     */
+    const mentioned = message({
+      appId: 'cli_one',
+      text: '测试会话',
+      addressed: false,
+      mentionedAppIds: ['cli_two'],
+    })
+    const plan = world.responder.plan(mentioned)
+    assert.equal(plan.bot === null ? null : plan.bot.id, 'dev', '被点名的那台才是候选第一名')
+    assert.equal(plan.speak, true, 'requireMention 打开的群里，被点名就是该它回答')
+    assert.equal(plan.reason, 'named')
+
+    const result = await world.responder.onMessage(mentioned)
+    assert.equal(result.botId, 'dev')
+    assert.equal(result.sessionId, 'team-bot-dev-oc_a', '它用自己的会话')
+    assert.equal(world.sent[0].appId, 'cli_two', '并从**它自己**的应用发出去（另一个应用发的会被飞书拒）')
+    assert.equal(world.store.get('chat', 'oc_a').primary_bot_id, 'dev', '首次接触：点名定归属')
+  } finally {
+    world.cleanup()
+  }
+})
+
+test('点名定归属，但不改一个已经有主的群', async () => {
+  const world = makeWorld({
+    bots: [
+      { id: 'req', displayName: '需求机器人', role: 'req', enabled: true },
+      { id: 'dev', displayName: '个人网银前端', role: 'dev', enabled: true, feishu: { appId: 'cli_two' } },
+    ],
+  })
+  try {
+    await world.responder.onMessage(message({ appId: 'cli_one' }))
+    assert.equal(world.store.get('chat', 'oc_a').primary_bot_id, 'req')
+    const named = await world.responder.onMessage(
+      message({ messageId: 'om_2', appId: 'cli_one', text: '看下这个', addressed: false, mentionedAppIds: ['cli_two'] }),
+    )
+    assert.equal(named.botId, 'dev', '被点名的人回答')
+    assert.equal(world.store.get('chat', 'oc_a').primary_bot_id, 'req', '但"这个群归谁记"不变')
   } finally {
     world.cleanup()
   }
