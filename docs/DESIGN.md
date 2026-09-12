@@ -272,6 +272,9 @@
 8. **分诊**（`lib/feishu/triage.js`）：`requirement` / `status` / `question` / `smalltalk` /
    `command` / `noise`。**被 @ 压过词表**：@ 了机器人但分诊判成 status/question 的，仍然交给提取层
    （代价是一张待确认卡，收益是不会出现"我 @ 了它，它说没发现诉求"）。
+   ⚠️ **这条判据 2026-09-12 起挂起重想**：`feishu.addressedOverridesIntent` 默认仍是 `true`，
+   但使用者明确嫌它吵（"限制了跟机器人沟通"），本部署已设 `false`。
+   见 [`OPEN-QUESTIONS.md`](OPEN-QUESTIONS.md)#1。
 9. **提取**（`lib/feishu/extract.js`）：标题、问题、建议方案、优先级、仓库、验收标准、缺失项。
 10. **建单或落空**：新建需求（并回卡）、并入已有需求（去重 + 相似度）、追问缺失项（每群只问一次）、
     或**记下原因**（"漏单"就是靠这个可查）。

@@ -10,6 +10,7 @@ DSH 的团队协作层：**需求 / 任务 / 两道人工确认 / 租约 / 决�
 > - **要用它** → [`docs/USER-GUIDE.md`](docs/USER-GUIDE.md)（使用说明书：装/配/群里怎么用/面板六个页签/排障手册）
 > - **要改它** → [`docs/DESIGN.md`](docs/DESIGN.md)（现状：架构、数据模型、每条链路的失败行为、12 条不变量、改动指引）
 > - **想知道还差什么** → [`docs/REVIEW-01.md`](docs/REVIEW-01.md)、[`docs/REVIEW-02.md`](docs/REVIEW-02.md)、[`docs/GAP-VS-DESIGN.md`](docs/GAP-VS-DESIGN.md)
+> - **还没定的事** → [`docs/OPEN-QUESTIONS.md`](docs/OPEN-QUESTIONS.md)（挂起的问题：现状判据、实测证据、候选路线与代价）
 
 一句话：**群里说一句话 → 变成需求对象 → 拆任务 → 两道确认 → 交给执行会话跑一轮 → 汇报回写成证据 → 提交验收**，
 并且在 DSH GUI 里有一块台账面板可以看和点。整条链路都在真实 harness / 真实飞书凭据上验过（见「实测」）。
@@ -563,6 +564,8 @@ TEAM_CLIENT_TEST_MODULES=/path/with/node_modules node --test test/client-render.
 
 - **`docs/REQUIREMENTS.md`** —— **要做什么**（改造后需求）：形态约束、R1–R14 可验收条目与状态、明确不做、做不到。
 - **`docs/DESIGN.md`** —— 现在是什么（as-built 架构说明书）。
+- **`docs/OPEN-QUESTIONS.md`** —— **还没定的事**（当前：需求判据、身份映射能不能自己长出来）。
+  写代码改判据之前先读它，别把挂着的问题当成已定的规格。
 - **`docs/DSH-PLUGIN-NOTES.md`** —— DSH 插件接口的实测事实（§1~§9 侦察、**§10/§11 写代码时新踩的 14 个坑**）。
   写代码前读这份，能省掉两轮侦察。
 - **`docs/GAP-VS-DESIGN.md`** —— 历史：与**旧需求**的差距清单（每一批改了什么、为什么）。

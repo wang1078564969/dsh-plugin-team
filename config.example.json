@@ -136,7 +136,7 @@
     "requireMention": true,
     "//respond": "false = 只把消息记进台账，不在群里回答",
     "respond": true,
-    "//addressedOverridesIntent": "@ 了机器人就不再要求命中意图词（被点名是最强的意图信号）",
+    "//addressedOverridesIntent": "@ 了机器人就不再要求命中意图词（被点名是最强的意图信号）。设 false = @ 也走词表：问句与闲聊不再落成待确认卡，代价是「@机器人 导出按钮点了没反应」这类没有诉求词的报告也不建卡。判据本身仍在讨论，见 docs/OPEN-QUESTIONS.md",
     "addressedOverridesIntent": true,
     "//buttons": "卡片按钮需要飞书能回调到的 HTTPS 入口；DSH Web 只监听 127.0.0.1，所以默认关闭，卡片上写文本指令",
     "buttons": false,
