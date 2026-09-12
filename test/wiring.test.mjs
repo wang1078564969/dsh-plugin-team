@@ -208,6 +208,203 @@ test('every message in a group is recorded under that group\'s primary bot', asy
   }
 })
 
+test('an inbound image is downloaded, stored as asset://, receipted — and deduped by event_id', async () => {
+  /*
+   * 设计 04 §9：图片要"落库 + 生成引用（asset://...）"，群里回一句"已收到图片"。
+   * 这条走**真实入站路径**（伪造事件 → handleInbound），只有下载是真的假的：
+   * 客户端被替换成一个只会回字节的 `download`。
+   *
+   * 顺带钉住 event_id 去重：飞书重投时 message_id 会变、event_id 不变，
+   * 而"再跑一遍"的副作用就是群里多一句回执、盘上多一个目录。
+   */
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-team-asset-wiring-'))
+  const team = await import('../lib/team.js')
+  const ctx = fakeCtx()
+  try {
+    await team.apply(ctx, {
+      dataDir: dir,
+      workspace: join(dir, 'ws'),
+      tickIntervalMs: 0,
+      bots: [{ id: 'req', displayName: '需求机器人', role: 'req', enabled: true }],
+      feishu: { mode: 'off', appId: 'cli_x', appSecret: 's' },
+    })
+    const controller = ctx.teamFeishu
+    const downloads = []
+    // 入站资源走 `clientForChat(chatId)` 解析出来的客户端：替换它的 download。
+    controller.state.client = {
+      ready: true,
+      appId: 'cli_x',
+      download: async (messageId, fileKey, options) => {
+        downloads.push({ messageId, fileKey, type: options?.type })
+        return { ok: true, code: 0, msg: 'ok', contentType: 'image/png', bytes: Buffer.from('PNGDATA') }
+      },
+      call: async () => ({ ok: true, code: 0, msg: 'ok', data: {} }),
+    }
+    controller.state.clients.set('cli_x', controller.state.client)
+
+    const imageEvent = {
+      __appId: 'cli_x',
+      event_id: 'ev_img_1',
+      sender: { sender_id: { open_id: 'ou_someone' }, sender_type: 'user' },
+      message: {
+        chat_id: 'oc_a', chat_type: 'group', message_id: 'om_img_1', message_type: 'image',
+        content: JSON.stringify({ image_key: 'img_key_1' }), create_time: String(Date.now()),
+      },
+    }
+    await controller.handleInbound(imageEvent)
+    assert.deepEqual(downloads, [{ messageId: 'om_img_1', fileKey: 'img_key_1', type: 'image' }])
+
+    const stored = controller.state.assets.all()
+    assert.equal(stored.length, 1)
+    assert.equal(stored[0].ref.startsWith('asset://'), true)
+    assert.equal(stored[0].exists, true, '内容真的落在盘上')
+    assert.equal(stored[0].chat_id, 'oc_a')
+
+    /*
+     * 这一类消息**没有正文可判**，所以它在"记录是地板"那一侧就结束了：
+     * 资产落盘 + 收件箱一条"为什么没建单" + 一行日志 + 回执。
+     *
+     * 注意收件箱那条：`feishu.mode: 'off'` 时流水线没起来，记录由**地板自己**写。
+     * 这不只是记账 —— 去重表就是收件箱，少了它，重投的消息会被再下载一遍。
+     */
+    const doc = controller.state.inbox.get('om_img_1')
+    assert.notEqual(doc, null, '记录是地板：流水线没起来，收件箱也要有这一条')
+    assert.equal(doc.triage_kind, 'asset')
+    assert.match(doc.ignored_reason, /已落库为资产/)
+    assert.equal(doc.event_id, 'ev_img_1')
+    assert.equal(doc.assets[0].ref, stored[0].ref, 'agent 按需读的就是这个引用')
+    assert.equal(doc.recorded_by, 'req', '记在主机器人名下')
+
+    const logged = await team.logsApi.snapshot({ file: 'false' })
+    const lines = logged.log.rows.map((row) => row.source + ':' + row.message)
+    assert.equal(
+      lines.some((line) => line.startsWith('asset:收到 1 个资源：asset://')),
+      true,
+      '落库要留一行日志：' + JSON.stringify(lines.slice(-4)),
+    )
+
+    // 重投（同一个 event_id、新的 message_id）：不再下载、不再多存一份。
+    await controller.handleInbound({ ...imageEvent, message: { ...imageEvent.message, message_id: 'om_img_2' } })
+    assert.equal(downloads.length, 1, '重投没有重新下载')
+    assert.equal(controller.state.assets.all().length, 1, '也没有多存一份')
+
+    // 观测页要能看到这些引用（"落库 + 引用"只完成了一半，另一半是人查得到）。
+    const snapshot = await team.logsApi.snapshot({})
+    assert.equal(snapshot.assets.count, 1)
+    assert.equal(snapshot.assets.rows[0].ref, stored[0].ref)
+    assert.equal(snapshot.assets.rows[0].exists, true)
+  } finally {
+    for (const disposer of ctx.effects) if (typeof disposer === 'function') disposer()
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('日报：摘要桶按群聚合，并把「现在有什么在等你」现算出来', async () => {
+  /*
+   * 设计 04 §2.1 的报告卡 + §0 的"人不在时补发"。
+   *
+   * 两件事合在一条日报里，理由很直接：`digest` 模式的意义是"这类话不必马上说"，
+   * 而"攒起来的东西一定要有人说"；人离开一天回来，最需要知道的不是"发生过什么"
+   * （那是日志），而是**现在有什么在等他**。
+   */
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-team-report-'))
+  const team = await import('../lib/team.js')
+  const ctx = fakeCtx()
+  try {
+    await team.apply(ctx, {
+      dataDir: dir,
+      workspace: join(dir, 'ws'),
+      tickIntervalMs: 0,
+      bots: [{ id: 'req', displayName: '需求机器人', role: 'req', enabled: true }],
+      feishu: { mode: 'off', appId: 'cli_x', appSecret: 's' },
+    })
+    const controller = ctx.teamFeishu
+    const store = controller.store
+    const sent = []
+    controller.state.client = {
+      ready: true,
+      appId: 'cli_x',
+      send: async (chatId, payload) => {
+        sent.push({ chatId, payload })
+        return { ok: true, code: 0, data: { message_id: 'om_' + String(sent.length) } }
+      },
+      request: async (method, path, body) => {
+        sent.push({ method, path, body })
+        return { ok: true, code: 0, data: { message_id: 'om_' + String(sent.length) } }
+      },
+      call: async () => ({ ok: true, code: 0, msg: 'ok', data: {} }),
+    }
+    controller.state.clients.set('cli_x', controller.state.client)
+
+    // 一个群：主机器人是 req；一个需求长在这个群里；它下面有一个等确认的任务。
+    store.put('chat', { id: 'oc_a', chat_type: 'group', app_id: 'cli_x', primary_bot_id: 'req', messages: 3 })
+    store.put('requirement', {
+      id: 'req-2026-001', title: '支付重试', state: 'dispatched',
+      origin: { surface: 'feishu', chat_id: 'oc_a', excerpts: [] },
+    })
+    store.put('task', {
+      id: 'task-1', req: 'req-2026-001', title: '实现退避', state: 'assigned', domains: ['development'],
+      gates: [
+        { name: 'accept', state: 'pending', required_by: ['human:zhouyu'], satisfied_by: [] },
+        { name: 'start', state: 'satisfied', required_by: ['human:zhouyu'], satisfied_by: ['human:zhouyu'] },
+      ],
+    })
+    // 另一个群没有待办、也没有摘要：日报不该为它发一条空卡。
+    store.put('chat', { id: 'oc_empty', chat_type: 'group', app_id: 'cli_x', primary_bot_id: 'req', messages: 0 })
+
+    const report = await controller.flushReports('2026-09-12')
+    assert.deepEqual(report.map((row) => row.chatId), ['oc_a'], '只给有内容的群发')
+    assert.equal(sent.length >= 1, true, '日报真的发出去了')
+
+    const card = JSON.parse(
+      String(sent[sent.length - 1].payload?.content ?? sent[sent.length - 1].body?.content ?? '{}'),
+    )
+    const text = JSON.stringify(card)
+    assert.match(text, /日报 2026-09-12/)
+    assert.match(text, /待确认 task-1：实现退避 —— accept：等 human:zhouyu/)
+    assert.equal(text.includes('start：等'), false, '已经确认的门禁不该再催一遍')
+
+    // 桶取走之后就空了：同一条进度不会今天、明天各说一次。
+    const again = await controller.flushReports('2026-09-12')
+    assert.deepEqual(again.map((row) => row.chatId), ['oc_a'], '待办还在，所以还有内容')
+    const lines = (await team.logsApi.snapshot({ file: 'false' })).log.rows.filter((row) => row.source === 'report')
+    assert.equal(lines.length >= 1, true, '每次发送都留一行日志')
+  } finally {
+    for (const disposer of ctx.effects) if (typeof disposer === 'function') disposer()
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('a timer service arms the daily report, and switching it off (-1) arms nothing', async () => {
+  const team = await import('../lib/team.js')
+  const armed = []
+  const makeCtx = () => {
+    const ctx = fakeCtx()
+    ctx.get = (name) => (name === 'timer' ? { interval: (callback, ms) => { armed.push({ callback, ms }); return () => {} } } : undefined)
+    return ctx
+  }
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-team-report-timer-'))
+  try {
+    await team.apply(makeCtx(), {
+      dataDir: dir, workspace: join(dir, 'ws'), tickIntervalMs: 0, bots: [],
+      feishu: { mode: 'off', appId: 'cli_x', appSecret: 's' },
+    })
+    // 补发定时器（5 秒）一直都在；日报是**多出来的**那一张（10 分钟看一次表）。
+    assert.equal(armed.filter((one) => one.ms === 10 * 60 * 1000).length, 1, '默认 18 点：装一张日报表')
+    assert.equal(armed.some((one) => one.ms === 5_000), true, '补发节流窗口的表照旧')
+
+    armed.length = 0
+    await team.apply(makeCtx(), {
+      dataDir: dir, workspace: join(dir, 'ws'), tickIntervalMs: 0, bots: [],
+      feishu: { mode: 'off', appId: 'cli_x', appSecret: 's', dailyReportHour: -1 },
+    })
+    assert.equal(armed.some((one) => one.ms === 10 * 60 * 1000), false, '-1 = 不发日报，也就不装表')
+    assert.equal(armed.some((one) => one.ms === 5_000), true)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
 test('the logs route is published too, and the log bus survives a restart through its file', async () => {
   /*
    * 设计 05 §4.0：日志放在页面第一屏，因为"出问题时人第一反应是刚才发生什么了"。

@@ -168,6 +168,48 @@ test('the degradation ladder stops at the first accepted rung and records every 
   assert.equal(rejected.has('text'), true)
 })
 
+test('话题隔离：replyTo 走引用回复；引用失败自动退化为普通消息（不能吞掉答案）', async () => {
+  const calls = []
+  const fetchImpl = async (url, init) => {
+    const href = String(url)
+    calls.push({ url: href, body: init?.body === undefined ? null : JSON.parse(init.body) })
+    if (href.includes('tenant_access_token')) {
+      return { json: async () => ({ code: 0, msg: 'ok', tenant_access_token: 't', expire: 7200 }) }
+    }
+    // 引用回复这条路被拒（消息撤回 / 权限不足）。
+    if (href.includes('/reply')) return { json: async () => ({ code: 230002, msg: 'message not found' }) }
+    return { json: async () => ({ code: 0, msg: 'ok', data: { message_id: 'om_new' } }) }
+  }
+  const client = new FeishuClient(
+    { appId: 'cli_x', appSecret: 's', baseUrl: 'https://open.feishu.cn', ready: true },
+    { fetch: fetchImpl },
+  )
+  const ladder = [{ level: 1, via: 'card', payload: { msg_type: 'interactive', content: '{"x":1}', uuid: 'u1' } }]
+  const delivered = await client.sendThrough('oc_1', ladder, { replyTo: 'om_original' })
+  assert.equal(delivered.ok, true, '退化之后照样发出去')
+  assert.equal(delivered.reply_to, null)
+  assert.equal(delivered.messageId, 'om_new')
+  // 先试引用、被拒之后退回普通消息：两次都留痕，人看得出发生了什么。
+  assert.equal(calls.some((one) => one.url.includes('/im/v1/messages/om_original/reply')), true)
+  assert.deepEqual(delivered.attempts, [
+    { level: 1, via: 'card', code: 230002, ok: false, reply_to: 'om_original' },
+    { level: 1, via: 'card', code: 0, ok: true, reply_to: null, fallback: true },
+  ])
+  // 引用成功时 `uuid` 不带过去：飞书不接受 reply 接口上的幂等键。
+  const okImpl = async (url, init) => {
+    calls.push({ url: String(url), body: init?.body === undefined ? null : JSON.parse(init.body) })
+    if (String(url).includes('tenant_access_token')) return { json: async () => ({ code: 0, tenant_access_token: 't', expire: 7200 }) }
+    return { json: async () => ({ code: 0, msg: 'ok', data: { message_id: 'om_reply' } }) }
+  }
+  const client2 = new FeishuClient({ appId: 'cli_x', appSecret: 's', baseUrl: 'https://open.feishu.cn', ready: true }, { fetch: okImpl })
+  const replied = await client2.sendThrough('oc_1', ladder, { replyTo: 'om_original' })
+  assert.equal(replied.ok, true)
+  assert.equal(replied.reply_to, 'om_original')
+  const replyCall = calls.find((one) => one.url.includes('/reply'))
+  assert.equal(replyCall.body.uuid, undefined)
+  assert.equal(replyCall.body.msg_type, 'interactive')
+})
+
 test('a top-level payload survives: /bot/v3/info answers code 0 with bot OUTSIDE data', async () => {
   /*
    * The same trap as the auth endpoint, in a second place: this response is

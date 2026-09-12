@@ -205,7 +205,9 @@ test('digest events accumulate instead of hitting the group, and no chat means n
     const digested = await world.notifier.task(task, { reason: 'progress', progress: true, line: '步骤 1/3' })
     assert.equal(digested.action, 'digest', '进度类进摘要，不进群（设计文档 §2.2）')
     assert.equal(world.requests.length, 0, 'nothing was sent to the group')
-    assert.deepEqual(world.notifier.digestLines('task'), ['步骤 1/3'])
+    // 桶键是 `群|类型`：日报按群发，A 群的进度不能出现在 B 群的日报里。
+    assert.deepEqual(world.notifier.digestBuckets(), ['oc_a|task'])
+    assert.deepEqual(world.notifier.digestLines('oc_a|task'), ['步骤 1/3'])
 
     // 没有来源群（用 team 工具在 DSH 里建的需求）：跳过，但要说清为什么。
     const orphan = { ...task, req: 'req-does-not-exist' }
@@ -214,6 +216,43 @@ test('digest events accumulate instead of hitting the group, and no chat means n
     assert.equal(skipped.action, 'skip')
     assert.equal(skipped.reason, 'no-chat')
     assert.equal(world.requests.length, 0)
+  } finally {
+    world.cleanup()
+  }
+})
+
+test('新证据进摘要桶而不是群里：日报才是它出现的地方', async () => {
+  /*
+   * 设计 04 §2.2：进度类播报进 digest，不进群。判据是"有没有新证据"——
+   * 走的是真实路径：`run_task` 先把这一轮的汇报写成证据（**状态没变**），
+   * 再 submit（状态变了）。前者进摘要，后者才更新卡片。
+   */
+  const world = makeWorld()
+  try {
+    const { taskId } = world.seedTask()
+    world.handlers.accept_task({ id: taskId, actor: 'bot:dev' })
+    world.handlers.start_task({ id: taskId, actor: 'bot:dev' })
+    await settle()
+    const postsBefore = world.requests.filter((one) => one.method === 'POST').length
+
+    await world.handlers.run_task({ id: taskId, actor: 'bot:dev' })
+    await settle()
+
+    assert.deepEqual(world.notifier.digestBuckets(), ['oc_a|task'], '进的是这个群的摘要桶')
+    assert.deepEqual(
+      world.notifier.digestLines('oc_a|task'),
+      ['task-1：(本轮没有文本汇报)'],
+      '摘要里是这一轮的进展（这里没有文本汇报，如实写）',
+    )
+    assert.equal(
+      world.requests.filter((one) => one.method === 'POST').length,
+      postsBefore,
+      '摘要本身不进群：新证据只落桶，不产生新消息（submit 那一步是原地更新）',
+    )
+    // 日报取走之后桶空了：同一条进展不会今天、明天各说一次。
+    const drained = world.notifier.drainDigest()
+    assert.equal(drained.length, 1)
+    assert.deepEqual(world.notifier.digestBuckets(), [])
   } finally {
     world.cleanup()
   }

@@ -25,7 +25,9 @@ import {
   CARD_MAX_BYTES,
   FILE_THRESHOLD_BYTES,
   MAX_TABLE_ELEMENTS,
+  atLineAsText,
   buildCardJson,
+  cleanCell,
   buildCardPayload,
   degradationLadder,
   deliverCard,
@@ -156,6 +158,58 @@ test('卡片 JSON：header 带锚点，表格用原生组件，按钮 value 带 
   const buttons = card.elements.find((e) => e.tag === 'action')
   assert.equal(buttons.actions[0]?.value.action, 'task.accept')
   assert.equal(buttons.actions[0]?.value.task_id, 'task-8891')
+})
+
+test('footer note 在原生卡片上也渲染出来（以前只有文本降级里有）', () => {
+  const card = JSON.parse(buildCardJson(SAMPLE))
+  const note = card.elements[card.elements.length - 1]
+  assert.equal(note.tag, 'note', 'footer 是最后一段灰字')
+  assert.equal(note.elements[0].content, '⏱ 2m14s · 🧠 12.3k tok')
+  // 没有 footer 时不多出一个空 note。
+  const bare = JSON.parse(buildCardJson({ title: 't', blocks: [{ kind: 'markdown', content: 'x' }] }))
+  assert.equal(bare.elements.length, 1)
+  assert.equal(bare.elements.some((e) => e.tag === 'note'), false)
+})
+
+test('表格单元格先清理再渲染：换行、制表符、竖线都不会破坏表格', () => {
+  const table = {
+    headers: ['文件', '说明'],
+    rows: [
+      ['retry.ts\n（新增）', '第一行 | 第二行'],
+      ['back\toff.ts', 'ok'],
+    ],
+  }
+  // 等宽文本：一行还是_两_行（表头 + 分隔线 + 两行数据），没有被换行拆散。
+  const text = renderTableAsText(table)
+  assert.equal(text.split('\n').length, 4)
+  assert.match(text, /retry\.ts （新增）/)
+  assert.match(text, /第一行 \\?\| 第二行/, '竖线被转义，不再被当作列分隔符')
+
+  // 原生卡片：单元格里没有换行/制表符，竖线保持转义后的样子。
+  const rows = toFeishuCard({ title: 't', blocks: [{ kind: 'table', table }] }).card.elements[0].rows
+  assert.equal(rows[0].c0, 'retry.ts （新增）')
+  assert.equal(rows[0].c1, '第一行 \\| 第二行')
+  assert.equal(rows[1].c0, 'back off.ts')
+  assert.equal(cleanCell(null), '')
+  assert.equal(cleanCell(42), '42')
+})
+
+test('@人：卡片用 <at id>，纯文本降级自动换成 <at user_id>（两种语法不通用）', () => {
+  const spec = {
+    title: 't',
+    status: '🟡 开发中',
+    at_line: '<at id=ou_zhang></at> 这块等你确认',
+    blocks: [{ kind: 'markdown', content: '正文' }],
+  }
+  // 卡片：真的会通知人的那种写法。
+  const elements = JSON.parse(buildCardJson(spec)).elements
+  assert.equal(elements[1].content, '<at id=ou_zhang></at> 这块等你确认')
+  // 纯文本降级（4/5 级都用它当内容源）：语法必须换，否则人收不到通知。
+  const text = renderCardAsMarkdown(spec)
+  assert.match(text, /<at user_id="ou_zhang"><\/at> 这块等你确认/)
+  assert.equal(/<at id=/.test(text), false)
+  assert.equal(atLineAsText('<at id=ou_a></at> <at id=ou_b></at>'), '<at user_id="ou_a"></at> <at user_id="ou_b"></at>')
+  assert.equal(atLineAsText('没有标签'), '没有标签')
 })
 
 test('超过 5 个表格组件时，多出来的降级为文本（飞书的硬限制）', () => {

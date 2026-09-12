@@ -37,6 +37,9 @@ import {
   decideBroadcast,
   decisionToTarget,
   describeLeaseSpan,
+  footerOf,
+  formatElapsed,
+  formatTokens,
   isCritical,
   planDelivery,
   requirementStage,
@@ -138,6 +141,50 @@ const aLease = (over = {}) => ({
   release_reason: null,
   expiry_notices: 0,
   ...over,
+})
+
+/* ------------------------------------------------------------------ *
+ * footer note：耗时 / token / 步数（设计 04 §3.1）
+ * ------------------------------------------------------------------ */
+
+test('footer：没跑过的任务只有台账信息，跑过之后才多出耗时/步数/token', () => {
+  const task = makeTask()
+  assert.equal(footerOf(task), 'backend')
+  // 有释放次数与分支时它们照样在，而且顺序稳定。
+  assert.equal(footerOf({ ...task, release_count: 2, branch: 'feat/retry' }), 'backend · 已释放 2 次 · 分支 feat/retry')
+  assert.equal(footerOf(task, null), 'backend', 'null 与 undefined 都不能变成 "null" 字样')
+
+  const measured = footerOf(task, {
+    elapsed_ms: 134_000,
+    steps: 7,
+    tokens: { value: 12_345, source: 'usage' },
+  })
+  assert.equal(measured, 'backend · ⏱ 2m14s · 🧠 12.3k tok · 🔄 7 步')
+})
+
+test('footer 不谎报 0：provider 没上报的字段整段不显示', () => {
+  const task = makeTask()
+  // 只有耗时：token 与步数都不出现（而不是 🧠 0 tok / 🔄 0 步）。
+  assert.equal(footerOf(task, { elapsed_ms: 900 }), 'backend · ⏱ 900ms')
+  // 估出来的用量带 ≈，与 provider 实报的数字区分开。
+  assert.equal(footerOf(task, { elapsed_ms: 1000, tokens: { value: 940, source: 'estimated' } }), 'backend · ⏱ 1s · 🧠 ≈940 tok')
+  // 超时是"它还在等"的信号，不能省。
+  assert.equal(footerOf(task, { elapsed_ms: 60_000, timed_out: true }), 'backend · ⏱ 1m00s（超时）')
+  // 结构不对的实测数据也不能把 footer 弄成乱码。
+  assert.equal(footerOf(task, { elapsed_ms: 'abc', steps: -3, tokens: { value: 0 } }), 'backend')
+  assert.equal(footerOf(task, 'nonsense'), 'backend')
+})
+
+test('formatElapsed / formatTokens：短、可读、单位不丢', () => {
+  assert.equal(formatElapsed(0), '0ms')
+  assert.equal(formatElapsed(999), '999ms')
+  assert.equal(formatElapsed(1000), '1s')
+  assert.equal(formatElapsed(59_400), '59s')
+  assert.equal(formatElapsed(60_000), '1m00s')
+  assert.equal(formatElapsed(3_600_000), '1h00m')
+  assert.equal(formatTokens(940), '940')
+  assert.equal(formatTokens(12_345), '12.3k')
+  assert.equal(formatTokens(2_000_000), '2M')
 })
 
 /* ------------------------------------------------------------------ *
