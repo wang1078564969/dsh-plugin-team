@@ -223,6 +223,22 @@
 | **工具面** | `team` 工具只有台账动作 | 新增 `docs`（init/list/read/write/search/index/stale）、`remember`（默认落 `draft`，等人确认）、`recall` |
 | **观测页** | 只有日志/收件箱/资产/占比 | 多一块"团队文档"：条数、类型分布、缺字段的、过期的那几行（含"为什么要看一眼"的原文） |
 
+### 第七批：Git / MR / CI 对接（2026-09-12）
+
+先把**做不到的那一半**钉在这里（与 §七 第 7 条一致）：飞书卡片按钮与 Git 平台 webhook
+都需要**公网入站 HTTPS**，而 DSH Web 只监听 `127.0.0.1`。所以"点按钮合并"不可能有；
+真正检出、提交、开 MR、合并的是执行会话里的 `git` / `gh`。插件负责约定、判定、记录与播报。
+
+| 修的 | 之前 | 现在 |
+|---|---|---|
+| **分支与提交约定**（03 §1.3） | 无：agent 在一个工作目录里跑，没有任何约定 | `branchName()`（`req/<需求>-<slug>`、任务分支 `req/<需求>/<任务>`）、`commitTrailers()`（`Req:` / `Task:`）、`parseTrailers()` 反查、`commitProblems()` 检查；**代码类任务的 prompt 里直接写上这三条**（`lib/exec.js` 的 `gitConvention`）—— 靠文本而不是靠平台功能 |
+| **CI 状态机入口**（03 §1.5） | 状态机里有 `ci_start/ci_pass/ci_fail`，**没有任何入口** | `team` 工具新增 `ci` 动作（start/pass/fail/status）；结论记在 `task.ci`（url/summary/开始与结束时间） |
+| **`ci_stuck`**（03 §1.5 最常卡死的那条） | 无 | `ciState()` 超时判定（`repos.ciTimeoutMs`，默认 30 分钟）；tick 扫到就**播报一次**并记 `stuck_notified_at`（每轮都喊等于没有告警）；卡片 footer 显示"🧪 CI 等待中 12m" |
+| **能不能合并**（03 §1.4/§1.6） | `canApprove` 只是成员表里的一个数组，没人读 | `mergeDecision()` 三道门：**至少一个人类审批**（驳回不算票）+ **CI 必须通过** + **执行者够格**（只有 ops 或明确 canApprove 的人能合并，dev 只能开 MR）；`repo op=merge` 被挡时逐条返回 blocker，不靠提示词 |
+| **敏感文件 → 文档陈旧**（03 §1.4） | 无 | `sensitiveFiles()` 认接口契约/迁移/配置模板/CI 定义/权限；`repo op=link_mr` 记账时把 `related.repos` 命中该仓库的文档**标记为 stale**（只改状态，不改正文） |
+| **仓库知识索引**（03 §1.7） | 无 | `indexRepo()` 扫真实检出（目录、清单、scripts、测试目录、CI 文件、README 开头），`repo op=overview` 写成 `docs/specs/<repo>-overview.md`（带 frontmatter，`related.repos` 指回仓库）—— 机器人改代码前先读它 |
+| **仓库↔需求关联**（03 §1） | `knownRepos` 只存了个名字 | 新增 `repos.roots`（名字 → 检出路径）与 `repos.{ciTimeoutMs,requiredApprovals,autoMerge}`（自动合并默认关，设计原话"默认关闭，按需开启"） |
+
 ### 建议顺序
 
 1. ~~**A 类接完：出站通知链**~~ ✅ **已完成**（见上一节）。

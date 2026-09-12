@@ -162,6 +162,18 @@ test('footer：没跑过的任务只有台账信息，跑过之后才多出耗�
   assert.equal(measured, 'backend · ⏱ 2m14s · 🧠 12.3k tok · 🔄 7 步')
 })
 
+test('footer 带上 CI 状态：等待中显示等了多久，没有 CI 记录就整段不出现', () => {
+  const task = makeTask()
+  assert.equal(footerOf({ ...task, ci: { state: 'passed' } }), 'backend · 🧪 CI 通过')
+  assert.equal(footerOf({ ...task, ci: { state: 'failed', summary: 'lint' } }), 'backend · 🧪 CI 失败')
+  // 等待中：把开始时间放在 2 分钟前，footer 里要能看到"等了多久"。
+  const started = new Date(Date.now() - 125_000).toISOString()
+  assert.match(footerOf({ ...task, ci: { state: 'running', started_at: started } }), /^backend · 🧪 CI 等待中 2m\d\ds$/)
+  // 没有 started_at 也不要编一个时长出来。
+  assert.equal(footerOf({ ...task, ci: { state: 'running' } }), 'backend · 🧪 CI 等待中')
+  assert.equal(footerOf({ ...task, ci: { state: 'unknown' } }), 'backend', '不认识的 CI 状态不硬翻译')
+})
+
 test('footer 不谎报 0：provider 没上报的字段整段不显示', () => {
   const task = makeTask()
   // 只有耗时：token 与步数都不出现（而不是 🧠 0 tok / 🔄 0 步）。

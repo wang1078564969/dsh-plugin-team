@@ -38,7 +38,8 @@ DSH 的团队协作层：**需求 / 任务 / 两道人工确认 / 租约 / 决�
 | `lib/assets.js` | ✅ **入站资产**：图片/文件落到 `assets/<id>/<原名>` + `assets/index.jsonl`，引用是 `asset://<id>`；下载失败就不给引用 |
 | `lib/docs.js` | ✅ **文档载体**（设计 01 §4）：frontmatter 是硬要求（缺 owner 不写）、`docs/index.md` 与 `_meta/docs.json` 可重建、`supersedes`/`related` 的陈旧检测 |
 | `lib/recall.js` | ✅ **回忆**：一次提问同时查工作区文档、DSH 会话历史（`ctx.sessionQuery`）与台账；**不建自建记忆库**（设计 07 §0.3） |
-| `test/` | ✅ 481 个用例全绿（`npm test`），另有 4 个**可选**的渲染测试（见「实测」第 8 条） |
+| `lib/repos.js` | ✅ **Git/MR/CI 对接**（设计 03）：分支与 `Req:`/`Task:` trailer 约定、CI 状态机与 `ci_stuck`、合并三道门判定、敏感文件、仓库知识索引 |
+| `test/` | ✅ 494 个用例全绿（`npm test`），另有 4 个**可选**的渲染测试（见「实测」第 8 条） |
 | 记忆 / skills 库 / 角色 preset 自动生成 | ⬜ 设计文档 07 与 02 §1.2，尚未落进插件 |
 
 ## 三个一等对象：机器人 / 成员 / 会话
@@ -329,6 +330,32 @@ workspace/
 2. **过期的照样能搜到**，但会被标出来 —— "不知道"比"知道过期的"更糟。
 3. **写入冲突交给 git**：文档走分支与评审，团队对象由单一写入者保护，插件不发明乐观锁。
 
+## 代码仓库：约定、判定、记录（没有 webhook）
+
+**先说做不到的**：飞书的卡片按钮与 Git 平台的 webhook 都需要**公网入站 HTTPS**，
+而 DSH Web 只监听 `127.0.0.1`。所以没有"点一下按钮就合并"；真正检出、提交、开 MR、
+合并的是**执行会话里的 `git` / `gh`**。插件做它能做的三件：
+
+| 事 | 怎么落 | 工具调用 |
+|---|---|---|
+| **约定** | 分支 `req/<需求>-<slug>`、任务分支 `req/<需求>/<任务>`；**每条提交**带 `Req:` / `Task:` trailer —— `git log` 靠它们反查需求，代码历史与需求对象双向可追。代码类任务的 prompt 里直接写上这三条 | `repo op=branch`（顺带检查提交信息） |
+| **判定** | 能不能合并由三道门说话：至少一个**人类审批**（驳回不算票）+ **CI 通过** + **执行者够格**（只有 ops 或明确 `canApprove` 的人能合并，dev 只能开 MR） | `repo op=merge`（被挡时逐条返回 blocker） |
+| **记录 + 播报** | `ci`（start/pass/fail）推进状态机并把结论记在任务上；超时进 `ci_stuck` 并**播报一次** —— 长流水线看起来就是"卡住了"，不播报人以为机器人在偷懒 | `ci op=…`、卡片 footer 上的 `🧪 CI 等待中 12m` |
+
+还有两条顺带的好处：改了接口契约/迁移/配置模板（敏感文件）时，`related.repos` 命中该仓库的
+文档会**被标成 stale**（只改状态，不改正文）；`repo op=overview` 扫一次真实检出，写成
+`docs/specs/<repo>-overview.md`，机器人改代码前先读它。
+
+```jsonc
+// 配置：仓库名 → 本地检出路径（索引要扫真实目录）
+"repos": {
+  "roots": { "pay-service": "/srv/repos/pay-service" },
+  "ciTimeoutMs": 1800000,      // ci_stuck 判定线
+  "requiredApprovals": 1,      // 至少一个人类审批
+  "autoMerge": false           // 设计原话："默认关闭，按需开启"
+}
+```
+
 > 配置的**真身始终是那个文件**。面板是编辑它的界面，不是它的主人：手写的 `//` 注释键、面板不认识的键，保存时全部原样保留。
 
 ## 观测：设计 04 §11 那六个问题，现在能答几个
@@ -371,6 +398,8 @@ workspace/
 | `feishu.speakLeaseMs` | 两个机器人都可能接话时，先说话的那个把群占住多久（默认 90s） |
 | `feishu.dedupeRetentionDays` | 去重表的保留窗口（天，默认 30，`0` = 不清理）。它同时决定「日志」页的漏单/观测能回看多久 |
 | `feishu.dailyReportHour` | 日报时刻（**本地时间**的小时，默认 18，`-1` = 关）。日报 = 当天的摘要桶 + 现算的"在等谁确认" |
+| `repos.roots` | `{ "仓库名": "本地检出路径" }`：仓库知识索引要扫真实目录（`knownRepos` 只是名字清单） |
+| `repos.ciTimeoutMs` / `requiredApprovals` / `autoMerge` | `ci_stuck` 判定线（默认 30 分钟）/ 合并前至少几个审批（默认 1）/ 自动合并（默认关） |
 | ~~`feishu.chatIds`~~ | **已删除**：插件从来没有读它（填了也不会"只处理这些群"）。群绑定在机器人身上（`bots[].feishu.chats`）；旧值会被配置检查直接拒绝并说明原因 |
 | `sessions.presets` | **机器人之前的遗留兜底**：按角色指定 agent preset。机器人自己的 `agentPreset` 永远优先，所以它只对"名册里没有这个角色"或"手写的旧台账"起作用；面板不再请人填它 |
 
@@ -449,8 +478,8 @@ JSON 而不是数据库是**有意的**：出问题时人得能 `cat` 一个需�
     **没有运行态字段泄漏**。指名一个没配密钥的应用 → `invalid_config` + `bots[1].feishu.appId`，
     文件一个字节都没变；已删除的 `feishu.chatIds` → 明确拒绝并指向 `bots[].feishu.chats`。
 
-本地测试：`npm test` → **467 passed / 0 failed / 14 skipped**（跳过的是**可选**渲染测试组：台账页 / 配置页 /
-机器人·成员·会话三页 / 日志页，`npm i -D react react-dom jsdom` 后即跑 → **481 passed / 0 failed / 0 skipped**）。
+本地测试：`npm test` → **478 passed / 0 failed / 16 skipped**（跳过的是**可选**渲染测试组：台账页 / 配置页 /
+机器人·成员·会话三页 / 日志页，`npm i -D react react-dom jsdom` 后即跑 → **494 passed / 0 failed / 0 skipped**）。
 领域层另外用 hub 的 zod 实现当 oracle 做了 12 368 例差分（校验层 307 例逐字一致）；
 分诊/提取层也做了 0 差异差分。
 
