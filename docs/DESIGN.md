@@ -265,6 +265,12 @@
 7. **日报**（每天 `feishu.dailyReportHour`）：摘要桶（键 `群|类型`）+ **现算的"在等谁确认"**。
    `digest` 模式的意义是"这类话不必马上说"，但**攒起来的东西必须有人说**。
 8. **回执类**（收到图片/文件）也走这一层，所以节流/聚合/没有群就不发的规则**只有一份**。
+9. **三个入口都兜住构造失败**：`task` / `notice` / `report` 各自 try 住卡片构造，失败返回
+   `skip: card-build-failed` 并记日志 —— 播报层的"永远不抛"要靠每一个入口自己守住
+   （`report` 曾经漏了，一次形状不对的 `lines` 会让**当天后面所有群都不发日报**）。
+10. **"再提醒一次"必须换 id**：`card_key = callout:<id>`，同 id 的第二次投递是 PATCH。
+    定时催办的 id 因此带上小时时间片（`reason:taskId:YYYY-MM-DDTHH`）——
+    同一小时内合并，跨小时是一条新消息。
 
 ---
 
@@ -273,7 +279,12 @@
 `lib/exec.js`（566 行）是"心脏"：`agents.create` / `resume` 起会话，`followup` 投一条消息，
 等这一轮结束（事件监听 + 状态轮询 + `whenIdle()` 兜底，三者都不信任单一信号）。
 
-`run_task` 的顺序（每一步都能单独拒绝）：
+`run_task` 的顺序（每一步都能单独拒绝），**并且同一个任务同一时刻只驱动一轮** ——
+闸门是"读状态 → await 起会话 → await 驱动"，中间全是 await，模型并行调用或面板连点
+都会各过一道闸、驱动两轮真实会话（真花 token、evidence 后写者赢）。进程内的
+`runningTasks` 集合 + `try/finally` 释放解决它（第二个到达者拿到 `already_running`）。
+
+`run_task` 的顺序：
 
 1. **机器人能力闸**（`botCan(bot,'run_task')`，代码类任务再加 `write_code`）；
 2. **作用域闸**（`botCanTouchRepo(bot, task.repo)`）；
@@ -428,7 +439,10 @@
 - **oracle 差分**：领域层用 hub 的 zod 实现当参照做了 12 368 例差分；分诊/提取层做过 0 差异差分。
 - **走真实入站路径的用例**：喂伪造飞书事件走 `handleInbound`（记录、定主、资产、去重都在这条路上验）。
 - **每个"踩过的坑"都有一条用例**：两张卡的竞态、改派不重置门禁、footer 丢失、失败停在加载态、
-  点筛选读到旧条件、重投重复下载。
+  点筛选读到旧条件、重投重复下载、需求收口断路、自动释放的死任务、按钮关不掉的死按钮。
+- **与机器无关**：`test/run-all.mjs` 把 `DSH_HOME` 指向一个空临时目录。以前有若干用例
+  没传 `dataDir`，于是它们读的是**开发者本人的真实 `config.json`** —— 测试结果与这台机器有关，
+  而这会让别的缺陷时隐时现。
 
 ---
 
@@ -479,9 +493,14 @@
 
 ## 19. 改动指引（要改什么，去哪里）
 
+`team` 工具现在有 **39 个动作**（`buildTeamTool().parameters.properties.action.enum`）。
+其中**写动作统一过一道成员闸**（`createHandlers` 出口处的包装，不在各 handler 里）：
+纯读动作（`list`/`show`/`list_chats`/`recall`/`tick`）与按 `op` 判定的读子命令
+（`docs op=list|read|search|stale`、`repo op=branch|index`）不需要 actor，其余都需要。
+
 | 想做的事 | 改哪里 | 别忘了 |
 |---|---|---|
-| 加一个模型能调的动作 | `lib/tools.js`：`actions` 加实现 + `buildTeamTool()` 的 enum/参数/描述 | 用例；涉及写对象就走 `writeTask()`（播报挂在它上面）；写操作要 `actor` |
+| 加一个模型能调的动作 | `lib/tools.js`：`actions` 加实现 + `buildTeamTool()` 的 enum/参数/描述 | 用例；涉及写对象就走 `writeTask()`（播报挂在它上面）；**默认就会过成员闸**（除非把它加进 `ACTOR_FREE`）；参数要写进 schema，否则 `additionalProperties: false` 会让它传不进来 |
 | 加一种卡片 | `lib/feishu/broadcast.js` 加构造函数；`lib/notify.js` 加一个入口（`task`/`notice`/`report` 同形） | 卡片 spec 的字段（`status`/`confirm_line`/`at_line`/`footer`）在 `cards.js` 里渲染；footer 只放"真的有"的字段 |
 | 加一个页签 | `lib/client.js`：`tabButton()` 加一个 + 渲染函数 + `TeamLedger` 里取数 | 页签数与路由数的断言在 `test/client-half.test.mjs`；新读取路径要自己在 `lib/api.js` 加 |
 | 加一个接口 | `lib/api.js` 的对应 `create*Api`：`snapshot()` 给数据、`handler()` 处理方法与 body | 写操作必须校验 `actor`；路由要挂进 `lib/index.js` 的 `routes` 数组 |
@@ -516,7 +535,9 @@ node ~/.dsh/profiles/web/plugins/inventory-check.cjs /tmp/tree.yml
 
 （功能完备性的系统审查见 `docs/REVIEW-01.md` / `REVIEW-02.md`，本节只列写文档时已知的）
 
-0. **本节的缺口表已按第一轮审查更新** —— 系统性的功能完备性审查见 `docs/REVIEW-01.md`
+0. **两轮审查的跟踪**：第一轮 22 条（4 P0 已修）见 `docs/REVIEW-01.md`；第二轮的镜头是
+   "**这一批改动有没有引入新问题**"与"**从零装一台到日常用起来，哪一步会卡住**"，
+   结论见 `docs/REVIEW-02.md`。本节的缺口表按两轮结论更新。 —— 系统性的功能完备性审查见 `docs/REVIEW-01.md`
    （22 条发现，其中 4 条 P0 已修）；第二轮见 `docs/REVIEW-02.md`。
 1. **没有自治的"计划"层**：任务没有子步骤/进度百分比，`footer` 里的步数是"上一轮工具调用数"，
    不是"3/5 步"那种计划进度。

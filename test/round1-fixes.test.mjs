@@ -165,6 +165,38 @@ test('R1-P0-2 自动释放之后：门禁被作废，tick 不再每分钟重试�
   }
 })
 
+test('R1-P0-2 接了活却从不回应的人：需求负责人可以把任务收回来重派', async () => {
+  /*
+   * 这条以前也是死路：`assign` 不认 `assigned`、`reassign` 只认 `accepted`、
+   * accept 门禁超时只升级不改状态 —— 一个"接了但从不动"的人能把任务永久占住，
+   * 而设计里"接受代表这活归我了，就该有期限"正是要防这件事。
+   * 现在：需求负责人（或 PM）可以从 `assigned` 直接改派；执行者本人不行。
+   */
+  const world = makeWorld({
+    members: [
+      { key: 'human:pm', name: 'PM', domains: ['requirement', 'development'], role: 'owner' },
+      { key: 'human:silent', name: '沉默的人', domains: ['development'] },
+    ],
+  })
+  try {
+    const req = world.handlers.create_requirement({ title: 'x', owner: 'human:pm', actor: 'human:pm' })
+    world.handlers.confirm_requirement({ id: req.id, actor: 'human:pm' })
+    const proposed = world.handlers.propose_tasks({ id: req.id, tasks: [{ title: 'T', assignee: 'human:silent', domains: ['development'], acceptance_criteria: ['a'] }], actor: 'human:pm' })
+    world.handlers.confirm_split({ id: req.id, actor: 'human:pm' })
+    const taskId = proposed.tasks[0].id
+    assert.equal(world.store.get('task', taskId).state, 'assigned')
+
+    // 执行者本人不能自己把活推走（那是 reject 的语义，得说清理由）。
+    assert.equal(world.handlers.assign_task({ id: taskId, assignee: 'human:other', actor: 'human:silent' }).ok, false)
+    // 需求负责人可以收回来重派。
+    const moved = world.handlers.assign_task({ id: taskId, assignee: 'bot:dev', actor: 'human:pm' })
+    assert.equal(moved.ok, true, JSON.stringify(moved))
+    assert.equal(world.store.get('task', taskId).assignee, 'bot:dev')
+  } finally {
+    world.cleanup()
+  }
+})
+
 /* ------------------------------------------------------------------ *
  * P0-3：suspended 的出口
  * ------------------------------------------------------------------ */

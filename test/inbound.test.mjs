@@ -66,6 +66,9 @@ function inboundOf(event) {
 function makeWorld(feishuOverrides = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'dsh-team-inbound-'))
   const config = loadConfig({
+    // `dataDir` 一定要给：不给的话配置解析会去读**开发者本人的** ~/.dsh/team/config.json，
+    // 于是这台机器上的 senders/members 会让用例时过时挂。
+    dataDir: dir,
     workspace: join(dir, 'workspace'),
     tickIntervalMs: 0,
     defaultOwner: 'human:pm1',
@@ -184,6 +187,49 @@ test('chatter WITH substance that mentions the bot does become a draft — by de
     assert.equal(typeof strict.inbox.get('om_chatter').ignored_reason, 'string')
   } finally {
     strict.cleanup()
+  }
+})
+
+test('群命令的尾巴会到达 handler：`阻塞 task-1 等接口` 带上了原因', async () => {
+  /*
+   * 命令语法以前只认 `<动词> <id>` 两段，于是 `阻塞 task-1 等接口` **整条解析失败**、
+   * 掉进 prose 走分诊（一句本意是"给任务加原因"的话可能被建单）。现在多出来的部分
+   * 作为 `note` 传给 handler —— 这条用例从 ingest 的入口走，验的是"真的传到了"。
+   */
+  const world = makeWorld()
+  try {
+    const calls = []
+    const inner = createIngest({
+      config: world.config,
+      handlers: {
+        block_task: (args) => {
+          calls.push(args)
+          return { ok: true, what: '已阻塞：' + String(args.note ?? '') }
+        },
+      },
+      client: world.client,
+      inbox: world.inbox,
+      store: world.store,
+      triage,
+      extract,
+      cards,
+      broadcast,
+      log: { error: () => {} },
+    })
+    // 先把这条消息登记进群映射，命令才能认出发言人。
+    const result = await inner.onMessage({
+      chatId: 'oc_req',
+      chatType: 'group',
+      messageId: 'om_cmd_1',
+      text: '阻塞 task-1 等接口上线',
+      at: '2026-09-12T10:00:00.000Z',
+      sender: 'ou_wang',
+    })
+    assert.equal(result.command, 'block_task', JSON.stringify(result))
+    assert.equal(calls.length, 1, '命令要走到 handler')
+    assert.deepEqual(calls[0], { id: 'task-1', actor: 'human:pm1', note: '等接口上线' })
+  } finally {
+    world.cleanup()
   }
 })
 
