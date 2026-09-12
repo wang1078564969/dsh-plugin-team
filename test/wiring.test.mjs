@@ -207,3 +207,59 @@ test('every message in a group is recorded under that group\'s primary bot', asy
     rmSync(dir, { recursive: true, force: true })
   }
 })
+
+test('the logs route is published too, and the log bus survives a restart through its file', async () => {
+  /*
+   * 设计 05 §4.0：日志放在页面第一屏，因为"出问题时人第一反应是刚才发生什么了"。
+   * 这一条验两件事：**路由挂上了**，以及**重启前的日志还在**（内存缓冲重启即空，
+   * 而"刚重启完"恰恰是最需要看上一条的时候）。
+   */
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-team-logs-'))
+  const team = await import('../lib/team.js')
+  const { writeLogFile } = await import('../lib/logbus.js')
+  const ctx = fakeCtx()
+  try {
+    // 上一次进程留下的日志（模拟重启前）
+    writeLogFile(dir, [
+      { at: '2026-09-12T09:00:00.000Z', level: 'info', source: 'feishu', message: '重启前的一条：长连接就绪', data: null },
+    ])
+    await team.apply(ctx, {
+      dataDir: dir,
+      workspace: join(dir, 'ws'),
+      tickIntervalMs: 0,
+      bots: [],
+      feishu: { mode: 'off', appId: 'cli_x', appSecret: 's' },
+    })
+    assert.equal(team.logsApi.path, '/api/team/logs')
+    const snapshot = await team.logsApi.snapshot({ file: 'true' })
+    assert.equal(snapshot.ok, true)
+    assert.equal(
+      snapshot.log.rows.some((row) => String(row.message).includes('重启前的一条')),
+      true,
+      '文件里的旧日志被读出来了：' + JSON.stringify(snapshot.log.rows.map((r) => r.message)),
+    )
+    assert.equal(snapshot.log.rows.some((row) => String(row.message).includes('已激活')), true, '本次启动也记了')
+    assert.equal(typeof snapshot.messages.total, 'number', '收件箱统计（含漏单）')
+    assert.equal(typeof snapshot.delivery, 'object', '投递统计（降级率）')
+    /*
+     * 观测是在**宿主里**接上的，所以这里验的是接线本身：`metrics` 真的被建出来了、
+     * 面板要的那两段（降级率的分组、每群发言占比）真的在快照里，而且都是可读的空值
+     * 而不是 undefined —— "没有数据"和"这个功能没接"在页面上必须长得不一样。
+     */
+    assert.notEqual(team.metrics, null, '观测聚合被建出来了')
+    assert.deepEqual(snapshot.delivery.tiers, [], '还没有播报过：层级表是空的，不是 undefined')
+    assert.equal(snapshot.delivery.fallbackRate, 0)
+    assert.equal(snapshot.delivery.mentions, 0)
+    assert.equal(snapshot.share.threshold, 0.25)
+    assert.equal(snapshot.share.minSample, 8)
+    assert.deepEqual(snapshot.share.chats, [])
+    assert.deepEqual(team.metrics.tick(), [], '没有超线的群时不写日志')
+    // 脱敏：密钥一类的东西永远不该落进日志
+    const { redactSecrets } = await import('../lib/logbus.js')
+    assert.equal(redactSecrets('appSecret: "abc123"').includes('abc123'), false)
+    assert.equal(redactSecrets('Authorization: Bearer t-12345').includes('t-12345'), false)
+  } finally {
+    for (const disposer of ctx.effects) if (typeof disposer === 'function') disposer()
+    rmSync(dir, { recursive: true, force: true })
+  }
+})

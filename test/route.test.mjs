@@ -86,10 +86,14 @@ test('the ledger route is mounted even though ctx.get("connection") yields nothi
     assert.equal(ctx.registered.tools.length, 1)
     assert.equal(ctx.registered.tools[0].name, 'team')
 
-    // And BOTH routes must be up — through inject, not through the probe: the
-    // ledger the panel shows, and the configuration it edits.
+    /*
+     * And all THREE routes must be up — through inject, not through the probe:
+     * the ledger the panel shows, the configuration it edits, and the logs it
+     * tails（静态的走配置、滚动的走日志：配置快照每 3 秒重算一遍名册与自检
+     * 是浪费，自检还会真调飞书）。
+     */
     const paths = ctx.registered.routes.map((route) => route.path).sort()
-    assert.deepEqual(paths, ['/api/team/config', '/api/team/ledger'])
+    assert.deepEqual(paths, ['/api/team/config', '/api/team/ledger', '/api/team/logs'])
     for (const route of ctx.registered.routes) {
       assert.deepEqual(route.methods, ['GET', 'POST'], route.path)
       assert.equal(route.requestBody, 'buffered', route.path)

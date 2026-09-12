@@ -437,3 +437,17 @@ test('群准入的两个键可写、会被校验，并且是"登记过的群才�
     world.cleanup()
   }
 })
+
+test('表态（reaction）默认开，可以在配置里关掉', () => {
+  const world = makeWorld({ feishu: { appId: 'cli_x', appSecret: 's0' } })
+  try {
+    const config = loadConfig({ dataDir: world.dir })
+    assert.equal(config.feishu.reaction, true, '默认开：@ 了机器人应该立刻有反馈')
+    assert.equal(config.feishu.reactionEmoji, 'Get')
+    // 关掉它：不是所有人都想要机器人给自己加表情
+    writeFileSync(world.configFile, JSON.stringify({ feishu: { appId: 'cli_x', appSecret: 's0', reaction: false } }, null, 2), 'utf8')
+    assert.equal(loadConfig({ dataDir: world.dir }).feishu.reaction, false)
+  } finally {
+    world.cleanup()
+  }
+})

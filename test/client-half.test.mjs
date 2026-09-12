@@ -16,6 +16,8 @@ import { fileURLToPath } from 'node:url'
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
+import { CARD_VIAS, FALLBACK_VIAS } from '../lib/feishu/cards.js'
+
 const here = dirname(fileURLToPath(import.meta.url))
 const CLIENT_PATH = join(here, '..', 'lib', 'client.js')
 const PACKAGE_NAME = 'dsh-plugin-team'
@@ -130,10 +132,10 @@ test('the bundle talks to exactly the routes the host mounts', () => {
   const code = source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^[ \t]*\/\/.*$/gm, '')
   const urls = [...code.matchAll(/['"`](\/[A-Za-z0-9._\-/]*)['"`]/g)].map((match) => match[1])
   const routes = [...new Set(urls.filter((url) => url.startsWith('/api/')))]
-  // Exactly the two routes the host mounts, and nothing else: the ledger the
+  // Exactly the routes the host mounts, and nothing else: the ledger the
   // panel shows, and the configuration it edits. Both sit behind the same
   // authenticated /api fence.
-  assert.deepEqual(routes.sort(), ['/api/team/config', '/api/team/ledger'])
+  assert.deepEqual(routes.sort(), ['/api/team/config', '/api/team/ledger', '/api/team/logs'])
   assert.equal(/host\.call/.test(code), false, 'a shipped half has no host.call — reaching for it fails at runtime')
 })
 
@@ -152,12 +154,15 @@ test('the console offers five pages and highlights exactly the current one', () 
   const source = readFileSync(CLIENT_PATH, 'utf8')
   const code = source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^[ \t]*\/\/.*$/gm, '')
 
-  for (const label of ['台账', '配置', '机器人', '成员', '会话']) {
+  for (const label of ['台账', '配置', '机器人', '成员', '会话', '日志']) {
     assert.ok(code.includes(`'${label}'`), `the tab strip must offer the ${label} page`)
   }
-  // Five pages, one fetch: the ledger keeps its own GET, everything else shares
-  // the configuration read (no page may grow a second source of truth).
-  assert.equal((code.match(/tabButton\('/g) ?? []).length, 5, 'one tab button per page')
+  /*
+   * Six pages, two reads: the ledger keeps its own GET, the three roster pages
+   * share the configuration read, and the log page has its OWN (rolling) read —
+   * 把每 3 秒刷一次的东西塞进配置快照，等于每 3 秒重算一遍名册与自检。
+   */
+  assert.equal((code.match(/tabButton\('/g) ?? []).length, 6, 'one tab button per page')
   assert.ok(/var active = key === current\.tab/.test(code), 'the active tab is an equality, not a config-page special case')
   assert.equal(/=== \(current\.tab === 'config'\)/.test(code), false, 'the old two-tab rule must be gone')
 })
@@ -223,6 +228,21 @@ test('the roster pages write exactly what the host can accept', () => {
   // The credential names the app it belongs to, so there is no doubt which key is written.
   assert.ok(/应用密钥（' \+ \(targetApp/.test(code), 'the credential field names its app')
   assert.ok(/feishu\.apps\.' \+ targetApp \+ '\.appSecret/.test(code), 'and says which key a typed secret lands in')
+})
+
+test('the degradation tiers the page highlights are the ones the host actually uses', () => {
+  /*
+   * 页面是经典脚本，import 不到 `lib/feishu/cards.js` 的常量，所以降级层级必然是
+   * 一份副本。副本的危险是**静默漂移**：引擎加了第六级、观测层跟着改了，
+   * 页面上"降级率"却还在按旧的两级算 —— 一个看起来很正常、但其实是错的数字。
+   * 这条断言逐字比对两边，改了一边忘了另一边会在测试里红。
+   */
+  const source = readFileSync(CLIENT_PATH, 'utf8')
+  const match = /const FALLBACK_VIAS = (\[[^\]]*\])/.exec(source)
+  assert.notEqual(match, null, 'the page declares the fallback tiers it highlights')
+  // 客户端写的是单引号字面量，所以求值而不是 JSON.parse。
+  assert.deepEqual(new Function('return ' + match[1])(), FALLBACK_VIAS)
+  assert.deepEqual(CARD_VIAS.concat(FALLBACK_VIAS).length, 5, '五级降级链：三级卡 + 两级降级')
 })
 
 test('the bundle stays a classic script with no module syntax', () => {

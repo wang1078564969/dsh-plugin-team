@@ -178,6 +178,20 @@
 
 ## 七、建议顺序
 
+### 第三批 + 第四批：需求闭环、权限层、日志与观测（2026-09-12，都已落地并有测试）
+
+| 批次 | 修的 | 落地位置 |
+|---|---|---|
+| ③ 需求闭环 | `findDuplicate` 去重（标题先归一化再比）、`decideAsk` 每群只追问一次、`change`/`drop`/`suspend`/`resume` 入口、需求 `done → archived` 路径、跨域验收确认累加、主负责人可关门禁 | `lib/feishu/ingest.js`、`lib/tools.js`、`lib/domain/` |
+| ③ 权限与作用域 | `members` 名册 + `memberCanWrite`、`bots[].capabilities` 与角色默认能力、`botCanTouchRepo`、任务类型→域映射（`lib/tasktypes.js`，10 域 / 9 类型）、`gateWrite()` 在 accept/start/submit/verify 上按人查权 | `lib/members.js`、`lib/bots.js`、`lib/tasktypes.js`、`lib/tools.js` |
+| ④ 日志页 | 内存环形缓冲（500）+ `logs/team.jsonl`（2MB 轮转）双写、**写入前脱敏**、`/api/team/logs`、面板第六个页签：级别/来源筛选、重启前文件日志、收件箱漏单与**每条的分诊结论**、3 秒自动刷新（可关） | `lib/logbus.js`、`lib/api.js`、`lib/client.js` |
+| ④ 表态 | 被点到的消息加一个 reaction（失败只记日志，不影响回答） | `lib/team.js` |
+| ④ 降级率 | 五级降级链的**后两级占比**（`CARD_VIAS`/`FALLBACK_VIAS` 从 `cards.js` 导出，页面副本有测试逐字比对）；`via`/`mentions`/`created_at`/`deliveries` 落在卡台账上，重启不改口径 | `lib/metrics.js`、`lib/notify.js` |
+| ④ 发言占比 | 每群一行：分子 = 群里卡台账行数（原地更新不算新消息），分母 + 收件箱入站消息；**> 25% 且样本 ≥ 8 条**时在 tick 里写一行 warn（按群冷却 30 分钟） | `lib/metrics.js`、`lib/team.js` |
+| ④ 观测页两个坑 | ① 第一次读失败时页面**停在"读取日志中…"**（payload 永远为 null）→ 失败排在加载之前，并给一个刷新入口；② 点级别/来源按钮时 `patch()` 还没重渲染，`loadLogs` 读到的是**旧筛选** → 筛选由调用方显式传入 | `lib/client.js` |
+
+### 建议顺序
+
 1. ~~**A 类接完：出站通知链**~~ ✅ **已完成**（见上一节）。
 2. **超额完成：需求闭环**（`findDuplicate` 去重、`decideAsk` 追问、`change/drop/suspend` 入口、
    需求 `done/archived` 路径、多人验收门禁语义）—— 一件 M，逐项 S。现在需求只进不出、

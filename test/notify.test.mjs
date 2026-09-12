@@ -110,6 +110,13 @@ test('the first notification creates a message; the second updates THAT message 
     assert.equal(first.card_key, 'task:' + taskId)
     assert.equal(world.requests.length, 1)
     assert.equal(world.requests[0].method, 'POST')
+    /*
+     * 观测的**证据**落在这条台账记录上（设计 04 §11 第 4、5 条）。在这里先取一份
+     * 快照：`store.get` 给的是**活引用**，之后每一次原地更新都会改同一个对象，
+     * 想断言"第一次进群那一刻是什么样"就必须当场复制。
+     */
+    const cardId = cardRecordId('task:' + taskId)
+    const created = { ...world.store.get('card', cardId) }
 
     // 同一个对象的下一次通知：**原地更新**，而不是又发一条 —— 这就是"同一个话题一张卡"。
     const second = await world.notifier.task({ ...task, state: 'accepted' }, { reason: 'accept' })
@@ -129,6 +136,35 @@ test('the first notification creates a message; the second updates THAT message 
     const afterRestart = await restarted.task({ ...task, state: 'in_progress' }, { reason: 'start' })
     assert.equal(afterRestart.action, 'update')
     assert.equal(afterRestart.message_id, first.message_id, 'no second card after a restart')
+
+    /*
+     * `via` 回答"这条是从哪一级发出去的"（降级率的分子分母）；
+     * `deliveries` / `created_at` 回答"群里到底多了几条消息、被更新了几次" ——
+     * 后者是发言占比的分子，所以**更新不能把 created_at 刷成当前时间**，
+     * 否则"这个群有几条机器人消息"永远算不对。
+     */
+    assert.equal(created.via, 'card', '第一级就发出去了：没有降级')
+    assert.equal(created.bot_id ?? null, null, '没有指定机器人时如实写 null，不编一个 id')
+    assert.equal(created.deliveries, 1, '第一次投递就是一次')
+    assert.equal(typeof created.created_at, 'string')
+    assert.equal(created.card_key, 'task:' + taskId, '原始 card_key 一字不差')
+
+    const afterUpdates = world.store.get('card', cardId)
+    assert.ok(afterUpdates.deliveries > created.deliveries, '原地更新要计数（' + String(afterUpdates.deliveries) + '）')
+    assert.equal(afterUpdates.created_at, created.created_at, '更新不刷新"第一次进群"的时刻')
+    assert.equal(afterUpdates.updated_at >= created.updated_at, true)
+    assert.equal(world.store.all('card').length, 1, '无论更新几次，群里只有这一条消息')
+
+    const stats = world.notifier.stats()
+    assert.ok(stats.delivered >= 1)
+    assert.ok(stats.updated >= 2)
+    assert.equal(stats.byVia.card.delivered + stats.byVia.card.updated, stats.delivered + stats.updated,
+      '按 via 分桶的总和必须等于总数（否则降级率算的是另一批消息）')
+    assert.equal(stats.byChat.oc_a.delivered + stats.byChat.oc_a.updated, stats.delivered + stats.updated,
+      '按群分桶的总和也必须等于总数')
+    assert.equal(stats.byBot.team.delivered + stats.byBot.team.updated, stats.delivered + stats.updated,
+      '没指定机器人时归到 team 这一桶（单机器人安装），不是丢失')
+    assert.equal(stats.mentions, 4, '@人次数按投递累加（每有一条卡里 @ 了人就 +1）')
   } finally {
     world.cleanup()
   }
