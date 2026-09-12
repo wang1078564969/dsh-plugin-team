@@ -11,6 +11,7 @@ DSH 的团队协作层：**需求 / 任务 / 两道人工确认 / 租约 / 决�
 > - **要改它** → [`docs/DESIGN.md`](docs/DESIGN.md)（现状：架构、数据模型、每条链路的失败行为、12 条不变量、改动指引）
 > - **想知道还差什么** → [`docs/REVIEW-01.md`](docs/REVIEW-01.md)、[`docs/REVIEW-02.md`](docs/REVIEW-02.md)、[`docs/GAP-VS-DESIGN.md`](docs/GAP-VS-DESIGN.md)
 > - **还没定的事** → [`docs/OPEN-QUESTIONS.md`](docs/OPEN-QUESTIONS.md)（挂起的问题：现状判据、实测证据、候选路线与代价）
+> - ⚠️ **要重写它** → [`docs/ARCHITECTURE-V2.md`](docs/ARCHITECTURE-V2.md)（2026-09-12 决定**推倒重来**：工作区文件台账为唯一真相、一群一台编排机器人、两道真人门禁、单文件 ≤400 行。下面这份 README 与 `docs/DESIGN.md` 描述的都是**即将被删掉的那一版**）
 
 一句话：**群里说一句话 → 变成需求对象 → 拆任务 → 两道确认 → 交给执行会话跑一轮 → 汇报回写成证据 → 提交验收**，
 并且在 DSH GUI 里有一块台账面板可以看和点。整条链路都在真实 harness / 真实飞书凭据上验过（见「实测」）。

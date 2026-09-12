@@ -19,6 +19,11 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+
+import { Store } from '../lib/store.js'
 
 import {
   BroadcastChannel,
@@ -291,6 +296,44 @@ test('配额按 (天, 机器人, 人) 三元组隔离：换机器人不共享额
   assert.equal(quota.tryConsume('bot-b', DEV, '2026-02-03'), true, '另一个机器人有自己的额度')
   assert.equal(quota.tryConsume('bot-a', DEV, '2026-02-03'), false)
   assert.equal(quota.limit, 1)
+})
+
+test('配额计数落盘：重启之后还算数，被静默的次数也留下来（R13.5）', () => {
+  /*
+   * 这条以前是内存 Map：进程一重启就当今天没 @ 过人 —— 于是"开发机上重启三次"
+   * 就等于配额 ×3。而它防的正是"一个下午被 @ 二十次"。
+   */
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-team-quota-'))
+  try {
+    const store = new Store(dir).load()
+    const day = '2026-02-03'
+    const first = new MentionQuota(2, { store, today: day })
+    assert.equal(first.tryConsume('coord', DEV, day), true)
+    assert.equal(first.tryConsume('coord', DEV, day), true)
+    assert.equal(first.tryConsume('coord', DEV, day), false, '超限')
+    assert.equal(first.silenced('coord', DEV, day), 1, '被静默的次数要记下来')
+
+    // 换一个实例（= 重启），额度与静默次数都还在
+    const second = new MentionQuota(2, { store, today: day })
+    assert.equal(second.used('coord', DEV, day), 2, '重启之后今天已经用掉的额度不能清零')
+    assert.equal(second.silenced('coord', DEV, day), 1)
+    assert.equal(second.tryConsume('coord', DEV, day), false, '重启不会白送一次 @')
+
+    // 记录长什么样（面板与观测读的就是它）
+    const rows = store.all('quota')
+    assert.equal(rows.length, 1)
+    assert.equal(rows[0].day, day)
+    assert.equal(rows[0].bot, 'coord')
+    assert.equal(rows[0].who, DEV)
+    assert.equal(rows[0].used, 2)
+
+    // 老记录会被清掉（配额只关心今天，留一周是为了"昨天是不是也超了"）
+    store.put('quota', { id: 'old', day: '2026-01-01', bot: 'coord', who: DEV, used: 9, silenced: 0 })
+    assert.deepEqual(second.prune(day), ['old'])
+    assert.equal(store.get('quota', 'old'), null)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
 })
 
 test('不该 @ 人的决策转静默是空操作（不能把状态跃迁也改掉）', () => {

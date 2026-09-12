@@ -285,3 +285,70 @@ test('两级的名单是共享常量：观测层不自己再写一遍字符串',
   // 五级 = 三级卡 + 两级降级，一级不多一级不少。
   assert.equal(CARD_VIAS.length + FALLBACK_VIAS.length, 5)
 })
+
+test('@人配额与用量都是落盘事实：重启之后还算数（R13.5 / R13.6）', () => {
+  /*
+   * 这两条的失败方式很像，都是"看着有、其实不算数"：
+   *   · 配额以前是内存 Map，重启就当今天没 @ 过人 —— 而它防的正是"一下午被 @ 二十次"；
+   *   · 用量以前只有卡片 footer 上一轮的 token，"这个机器人这个群这些天花了多少"没有答案。
+   * 所以两条都从**落盘记录**读，这条用例专门验"换个进程实例读出来的还是一样"。
+   */
+  const world = makeWorld()
+  try {
+    world.store.put('quota', { id: '2026-09-12.team-dev.human-pm1', day: '2026-09-12', bot: 'dev', who: 'human:pm1', used: 3, silenced: 2 })
+    world.store.put('quota', { id: '2026-09-11.team-dev.human-pm1', day: '2026-09-11', bot: 'dev', who: 'human:pm1', used: 3, silenced: 0 })
+
+    const quota = world.metrics.quota()
+    assert.equal(quota.day, '2026-09-12')
+    assert.equal(quota.rows.length, 1, '只算今天那一行')
+    assert.equal(quota.rows[0].used, 3)
+    assert.equal(quota.silenced, 2, '被静默几次要看得见 —— 那是"配额到底有没有生效"的证据')
+
+    // 用量：三条轮次，其中一条 provider 没上报 token
+    for (const row of [
+      { id: 'usage-1', day: '2026-09-12', bot: 'dev', chat: 'oc_a', tokens: 1200, elapsed_ms: 5000, steps: 3 },
+      { id: 'usage-2', day: '2026-09-12', bot: 'dev', chat: 'oc_a', tokens: 800, elapsed_ms: 3000, steps: 2 },
+      { id: 'usage-3', day: '2026-09-12', bot: 'req', chat: 'oc_b', tokens: null, elapsed_ms: 1000, steps: 1 },
+    ]) {
+      world.store.put('usage', { task: 'task-' + row.id, req: 'req-2026-001', session: 'run-1', at: '2026-09-12T10:00:00Z', token_source: 'provider', ...row })
+    }
+
+    const usage = world.metrics.usage({ days: 30 })
+    assert.equal(usage.total.runs, 3)
+    assert.equal(usage.total.withTokens, 2)
+    assert.equal(usage.total.tokens, 2000, '只把真报了用量的那两轮加起来')
+    assert.equal(usage.total.unknownRuns, 1, '没上报的单独数出来，不混进总额当"花得少"')
+    assert.equal(usage.byDayBotChat.length, 2, '按天 × 机器人 × 群分桶')
+    const devBucket = usage.byDayBotChat.find((one) => one.bot === 'dev')
+    assert.equal(devBucket.tokens, 2000)
+    assert.equal(devBucket.runs, 2)
+    assert.equal(devBucket.elapsed_ms, 8000)
+
+    // 窗口外的老记录不算（否则"这个月花了多少"会一直往上涨）
+    world.store.put('usage', { id: 'usage-9', day: '2026-07-01', bot: 'dev', chat: 'oc_a', task: 'task-old', req: 'req-2026-001', session: 'run-1', tokens: 9999, elapsed_ms: 1, steps: 1, at: '2026-07-01T10:00:00Z' })
+    assert.equal(world.metrics.usage({ days: 30 }).total.runs, 3, '30 天窗口不含 7 月那条')
+    assert.equal(world.metrics.usage({ days: 365 }).total.runs, 4, '放宽窗口就能看到它')
+    assert.equal(world.metrics.usage({ days: 30 }).total.tokens, 2000, '窗口外的 token 不进来')
+
+    // 快照里两样都在（面板读的就是它）
+    const snap = world.metrics.snapshot()
+    assert.equal(snap.quota.day, '2026-09-12')
+    assert.equal(snap.usage.total.runs, 3)
+  } finally {
+    world.cleanup()
+  }
+})
+
+test('每群一行能看到卡片被原地更新了几次（R13.7）', () => {
+  const world = makeWorld()
+  try {
+    // 一张卡投递 4 次 = 创建 1 次 + 原地更新 3 次；另一张只投递过 1 次。
+    world.card('oc_a', { deliveries: 4 })
+    world.card('oc_a', { deliveries: 1 })
+    const row = world.metrics.chats().find((one) => one.chatId === 'oc_a')
+    assert.equal(row.sent, 2, '两条消息（一张卡一条）')
+    assert.equal(row.updates, 3, '更新次数 = deliveries - 1 的和；它塌成 0 就说明每次状态变化都在群里多贴一张卡')
+  } finally {
+    world.cleanup()
+  }
+})
