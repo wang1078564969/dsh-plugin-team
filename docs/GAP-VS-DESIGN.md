@@ -205,6 +205,24 @@
 | **日报 / 报告卡** | `buildReportCard` 与 `notifier.report()` 都在，但没有任何调度 → 进 digest 的进度**静默丢失** | 每天 `feishu.dailyReportHour`（本地时间，默认 18 点，`-1` 关）按群发一条：摘要桶（桶键 `群|类型`）+ **现算的"在等谁确认"**（只数未满足的门禁） |
 | **进度进摘要** | `digest` 模式没有生产者 | `writeTask` 判据扩成两种：状态变了 → 播报；状态没变但**多了一条证据** → 进摘要桶（agent 汇报的进展从此有落点） |
 
+### 第六批：文档载体与记忆（2026-09-12）
+
+设计 01 §4 的六件事与 07 的"记忆落在哪"，这一批按设计自己给出的**新排序**做：
+先做决定"能不能被检索到"的 frontmatter 与陈旧检测，索引用现算而不是自建索引器，
+写入冲突交给 git，附件配额不做，记忆**不建自建库**。
+
+| 修的 | 之前 | 现在 |
+|---|---|---|
+| **目录规范**（01 §3） | 只有 `workspace/` 是执行会话的 cwd，`docs/` 没有任何约定 | `docs init` 按规范建 `specs/ decisions/ runbooks/ meetings/<yyyy-mm>/ notes/ requirements/ _assets/ _drafts/` + `_meta/`，并按类型落文件（`docPath()`） |
+| **Frontmatter 硬要求**（01 §4.1） | 零命中 | `lib/docs.js`：解析/序列化/校验。**缺 id/type/title/owner/status/created/updated 一个字节都不写**；`owner` 是必填的理由就是设计那句"没有唯一责任人，文档会腐烂"；`requirement_view` 必须写明它是哪个对象的视图 |
+| **单一导航入口**（01 §4.2） | 无 | `docs/index.md` 由 frontmatter 现算，按 type 分组、每条一句说明 + 状态 + 责任人 + 更新日期 |
+| **索引可重建**（01 §4.3） | 无（设计建议优先用 DSH 自己的检索） | `docs/index.md` + `_meta/docs.json` 都是派生物，`rebuildIndex()` 覆盖式重建；`search()` 是朴素兜底（几十份文档走一遍目录比维护索引器便宜） |
+| **陈旧检测**（01 §4.6） | 零命中 | 引用图两个方向（`supersedes` / `related.docs`）：引用了已被取代的文档 → 报告里给出原因；`active` 但超过 `staleAfterDays`（默认 180 天）没更新 → 报告"可能过期"（**不自动改状态**：改内容要人点头） |
+| **记忆落在哪**（07 §0.2/§0.3） | `grep 记忆` 只在注释里 | **不建自建记忆库**：情景记忆用 DSH 的 `ctx.sessionQuery`（跨会话全文检索），沉淀知识写工作区文件（就是上面的 `docs/`）。`lib/recall.js` 一次提问同时查文档 + 会话历史 + 台账，每条都带出处 |
+| **查不到就说查不到** | — | 没有 `sessionQuery` 的 profile：`sessions: null` + 一句"这一半这次没查"；检索抛异常也不影响文档与台账的结果；`stale` 的文档**照样返回**并标出来（设计 07 §1.3：不知道比知道过期的更糟） |
+| **工具面** | `team` 工具只有台账动作 | 新增 `docs`（init/list/read/write/search/index/stale）、`remember`（默认落 `draft`，等人确认）、`recall` |
+| **观测页** | 只有日志/收件箱/资产/占比 | 多一块"团队文档"：条数、类型分布、缺字段的、过期的那几行（含"为什么要看一眼"的原文） |
+
 ### 建议顺序
 
 1. ~~**A 类接完：出站通知链**~~ ✅ **已完成**（见上一节）。

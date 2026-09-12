@@ -128,6 +128,19 @@ function logsFixture(overrides = {}) {
         },
       ],
     },
+    knowledge: {
+      docs: {
+        root: '/Users/x/.dsh/team/ws/docs', exists: true, count: 3,
+        byType: { spec: 2, decision: 1 }, withProblems: 0, stale: 1, latest: '2026-09-10',
+      },
+      stale: [
+        {
+          id: 'spec-pay-retry', owner: 'human:u123', status: 'active', updated: '2026-02-03',
+          path: 'docs/specs/spec-pay-retry.md',
+          reasons: [{ kind: 'superseded_reference', target: 'spec-v1', message: '它引用的 spec-v1 已经是 superseded' }],
+        },
+      ],
+    },
     counts: { requirements: 1, tasks: 1, leases: 0 },
     ...overrides,
   }
@@ -445,6 +458,35 @@ test('每群发言占比：超线的群红，样本不足的群说明为什么�
   assert.match(rendered, /重启不会让比率变好看/)
   assert.match(rendered, /样本不足 8 条时不告警/)
 
+  app.assertNoWarnings()
+  await app.unmount()
+})
+
+test('团队文档：条数、类型分布、过期的那几行都画出来', { skip }, async () => {
+  const app = await mountConsole()
+  await app.openTab('日志')
+
+  const rendered = app.text()
+  assert.match(rendered, /团队文档（3）/)
+  assert.match(rendered, /spec 2 · decision 1/)
+  assert.match(rendered, /过期\/被取代 1/)
+  assert.match(rendered, /spec-pay-retry/)
+  assert.match(rendered, /human:u123/)
+  assert.match(rendered, /它引用的 spec-v1 已经是 superseded/, '为什么该看一眼是原文，不是编号')
+  assert.match(rendered, /index\.md 与 _meta\/docs\.json 都是\*\*派生物\*\*/)
+  assert.match(rendered, /没有 owner 的写不进去/)
+
+  app.assertNoWarnings()
+  await app.unmount()
+})
+
+test('工作区还没有文档库时，页面说的是"怎么建"，不是一个空表', { skip }, async () => {
+  const app = await mountConsole({
+    pages: [logsFixture({ knowledge: { docs: { exists: false, count: 0 }, stale: [] } })],
+  })
+  await app.openTab('日志')
+  assert.match(app.text(), /工作区里还没有文档库/)
+  assert.match(app.text(), /op=init/)
   app.assertNoWarnings()
   await app.unmount()
 })

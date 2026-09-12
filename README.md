@@ -36,7 +36,9 @@ DSH 的团队协作层：**需求 / 任务 / 两道人工确认 / 租约 / 决�
 | `lib/logbus.js` | ✅ **日志总线**：内存环形缓冲（500）+ `logs/team.jsonl`（2MB 轮转）双写、**写入前脱敏**、按级别/来源查询 |
 | `lib/metrics.js` | ✅ **观测聚合**：降级率（按 `via` 分桶）与每群发言占比（分子分母都是落盘事实）、> 25% 告警（tick 里扫，按群冷却） |
 | `lib/assets.js` | ✅ **入站资产**：图片/文件落到 `assets/<id>/<原名>` + `assets/index.jsonl`，引用是 `asset://<id>`；下载失败就不给引用 |
-| `test/` | ✅ 469 个用例全绿（`npm test`），另有 4 个**可选**的渲染测试（见「实测」第 8 条） |
+| `lib/docs.js` | ✅ **文档载体**（设计 01 §4）：frontmatter 是硬要求（缺 owner 不写）、`docs/index.md` 与 `_meta/docs.json` 可重建、`supersedes`/`related` 的陈旧检测 |
+| `lib/recall.js` | ✅ **回忆**：一次提问同时查工作区文档、DSH 会话历史（`ctx.sessionQuery`）与台账；**不建自建记忆库**（设计 07 §0.3） |
+| `test/` | ✅ 481 个用例全绿（`npm test`），另有 4 个**可选**的渲染测试（见「实测」第 8 条） |
 | 记忆 / skills 库 / 角色 preset 自动生成 | ⬜ 设计文档 07 与 02 §1.2，尚未落进插件 |
 
 ## 三个一等对象：机器人 / 成员 / 会话
@@ -297,6 +299,36 @@ hub 当年的「内管配置」现在搬进了插件自己的面板 —— 打�
    先查重，所以重投不会重新下载、重新落盘、重新回执。保留窗口 `feishu.dedupeRetentionDays`
    （默认 30 天）同时决定观测能回看多久。
 
+## 文档与记忆：工作区是主副本，DSH 是情景记忆
+
+设计 01 与 07 的结论合成一句话：**沉淀知识写工作区文件，发生过什么查 DSH 会话历史**。
+
+```
+workspace/
+├── docs/                       # 团队文档库（主副本，走 git）
+│   ├── index.md                # 人的入口（★ 从 frontmatter 现算，手改会被覆盖）
+│   ├── specs/ decisions/ runbooks/ notes/ requirements/
+│   ├── meetings/<yyyy-mm>/     # 会议纪要与群聊摘要
+│   └── _assets/
+└── _meta/docs.json             # 机器读的那一份（同样是派生物）
+```
+
+| 动作 | 工具调用 | 说明 |
+|---|---|---|
+| 建库 | `docs op=init` | 按目录规范建齐，并写出第一份 `index.md` |
+| 写文档 | `docs op=write id=… type=… title=… owner=… body=…` | **frontmatter 是硬要求**：缺 `owner` 之类的必填字段会被拒，一个字节都不写 |
+| 沉淀结论 | `remember title=… body=…` | 默认落 `status: draft`（涉及人/流程的判断要人点头，设计 07 §1.2），确认后改 `active` |
+| 重建索引 | `docs op=index` | `index.md` 与 `_meta/docs.json` 都是派生物，坏了重建即可 |
+| 看谁过期了 | `docs op=stale` | 引用了已被取代的文档、或 `active` 但 180 天没更新，都会带着原因列出来 |
+| 回忆 | `recall query=…` | 同时查**文档**、**DSH 会话历史**（`ctx.sessionQuery`，FTS5）与**台账**；每条都带出处，查不到的那一半会明说 |
+
+三条刻意的取舍：
+
+1. **不建自建记忆库**：跨会话检索 DSH 已经有了，自建只会更差。沉淀知识的家是
+   `docs/`，因为它要人能读、能改、能 diff、能跨机器共享。
+2. **过期的照样能搜到**，但会被标出来 —— "不知道"比"知道过期的"更糟。
+3. **写入冲突交给 git**：文档走分支与评审，团队对象由单一写入者保护，插件不发明乐观锁。
+
 > 配置的**真身始终是那个文件**。面板是编辑它的界面，不是它的主人：手写的 `//` 注释键、面板不认识的键，保存时全部原样保留。
 
 ## 观测：设计 04 §11 那六个问题，现在能答几个
@@ -417,8 +449,8 @@ JSON 而不是数据库是**有意的**：出问题时人得能 `cat` 一个需�
     **没有运行态字段泄漏**。指名一个没配密钥的应用 → `invalid_config` + `bots[1].feishu.appId`，
     文件一个字节都没变；已删除的 `feishu.chatIds` → 明确拒绝并指向 `bots[].feishu.chats`。
 
-本地测试：`npm test` → **455 passed / 0 failed / 14 skipped**（跳过的是**可选**渲染测试组：台账页 / 配置页 /
-机器人·成员·会话三页 / 日志页，`npm i -D react react-dom jsdom` 后即跑 → **469 passed / 0 failed / 0 skipped**）。
+本地测试：`npm test` → **467 passed / 0 failed / 14 skipped**（跳过的是**可选**渲染测试组：台账页 / 配置页 /
+机器人·成员·会话三页 / 日志页，`npm i -D react react-dom jsdom` 后即跑 → **481 passed / 0 failed / 0 skipped**）。
 领域层另外用 hub 的 zod 实现当 oracle 做了 12 368 例差分（校验层 307 例逐字一致）；
 分诊/提取层也做了 0 差异差分。
 
