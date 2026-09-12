@@ -451,3 +451,59 @@ test('表态（reaction）默认开，可以在配置里关掉', () => {
     world.cleanup()
   }
 })
+
+test('表态的默认范围是"每一条收到的消息"，可以收回到只对 @ 的', () => {
+  /*
+   * 默认 `all`：`requireMention: true` 的群里机器人只在被 @ 时开口，如果连表态也只对 @ 的做，
+   * 那么"它到底听见没有"就只能靠猜。吵的群用 `addressed` 收回去 —— 两个方向都是真实需求，
+   * 所以这里把**默认值**和**切换**都钉住。
+   */
+  const world = makeWorld({ feishu: { appId: 'cli_x', appSecret: 's0' } })
+  try {
+    assert.equal(loadConfig({ dataDir: world.dir }).feishu.reactionScope, 'all', '默认每一条都表态')
+
+    writeFileSync(
+      world.configFile,
+      JSON.stringify({ feishu: { appId: 'cli_x', appSecret: 's0', reactionScope: 'addressed', reactionEmoji: 'DONE' } }, null, 2),
+      'utf8',
+    )
+    const tuned = loadConfig({ dataDir: world.dir }).feishu
+    assert.equal(tuned.reactionScope, 'addressed')
+    assert.equal(tuned.reactionEmoji, 'DONE')
+
+    /*
+     * 值不认识 → **退回默认语义**（all），不是"当作没写"也不是猜一个：
+     * 手写文件的人拿到的是可预期的行为，而面板写入那条路由会被校验拦下并说清楚。
+     */
+    writeFileSync(
+      world.configFile,
+      JSON.stringify({ feishu: { appId: 'cli_x', appSecret: 's0', reactionScope: 'every-message' } }, null, 2),
+      'utf8',
+    )
+    assert.equal(loadConfig({ dataDir: world.dir }).feishu.reactionScope, 'all')
+  } finally {
+    world.cleanup()
+  }
+})
+
+test('配置台写入时会校验表态的三个键（形状与枚举）', () => {
+  const problems = validatePatch({ feishu: { reaction: 'yes' } })
+  assert.equal(problems.some((one) => one.path === 'feishu.reaction'), true, 'reaction 必须是布尔')
+
+  const emoji = validatePatch({ feishu: { reactionEmoji: '   ' } })
+  assert.equal(emoji.some((one) => one.path === 'feishu.reactionEmoji'), true, '空的表情名要拦住')
+
+  const scope = validatePatch({ feishu: { reactionScope: 'always' } })
+  assert.equal(scope.some((one) => one.path === 'feishu.reactionScope'), true, '范围只能是 all / addressed')
+
+  /*
+   * 反过来：合法的值一个都不能被拦。
+   *
+   * 表情名**故意不校验"是不是飞书认识的那一批"**：那份清单会变（现在是 185 个），
+   * 写死一份副本只会在飞书加了新表情之后拒绝一个完全合法的值。写错的结果是接口报错，
+   * 而那一行错误会出现在日志页的 `reaction` 行里 —— 比在这里猜要诚实。
+   */
+  assert.deepEqual(validatePatch({ feishu: { reaction: true } }), [])
+  assert.deepEqual(validatePatch({ feishu: { reactionScope: 'addressed' } }), [])
+  assert.deepEqual(validatePatch({ feishu: { reactionEmoji: 'SomeNewEmojiFromFeishu' } }), [])
+})

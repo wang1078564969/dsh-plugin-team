@@ -4,7 +4,7 @@
 > 想知道内部怎么实现，读 `docs/DESIGN.md`；想读设计取舍，读 `../team-agent-architecture/`；
 > 想看它现在缺什么，读 `docs/REVIEW-01.md` / `docs/REVIEW-02.md` / `docs/GAP-VS-DESIGN.md`。
 >
-> 本文写的每一个默认值、每一条命令，都在当前代码里核对过（2026-09-12，`518` 个用例全绿）。
+> 本文写的每一个默认值、每一条命令，都在当前代码里核对过（2026-09-12，`527` 个用例全绿）。
 
 ---
 
@@ -167,7 +167,7 @@ node ~/.dsh/profiles/web/plugins/inventory-check.cjs /tmp/tree.yml
 
 | 行为 | 说明 |
 |---|---|
-| **表态** | 被 @ 的消息立刻加一个 reaction（"我看到了"），失败只记日志 |
+| **表态** | **每一条收到的消息**立刻加一个 reaction（默认 `Get`，就是飞书那个"收到/懂了"的表情）—— "我看到了"。它和"回不回答"是两件事：`requireMention: true` 时群里只有被 @ 才开口，但每条消息都会表态。想只在被 @ 时表态就设 `feishu.reactionScope: "addressed"`；整个关掉用 `feishu.reaction: false`。失败只记日志 |
 | **回执** | 收到图片/文件会回一句"已收到图片"，并给一个 `asset://…` 引用（内容存在插件自己的盘上） |
 | **追问** | 需求缺关键信息时追问一次（每群 1 次、30 分钟 TTL），**不拦着建单** |
 | **去重** | 同一条消息重投（飞书会重投）只处理一次：权威键是 `event_id`，重投时 `message_id` 可能变 |
@@ -376,12 +376,14 @@ team recall query=退避
 | `feishu.speakLeaseMs` | `90000` | 两个机器人都可能接话时，先说话的把群占住多久 |
 | `feishu.dedupeRetentionDays` | `30` | 去重表的保留窗口（也决定日志页能回看多久）；`0` = 不清理 |
 | `feishu.dailyReportHour` | `18` | 日报时刻（**本地时间**）；`-1` = 关 |
-| `feishu.reaction` | `true` | 被 @ 时先表态 |
+| `feishu.reaction` | `true` | 收到消息时先表态（整个开关） |
+| `feishu.reactionEmoji` | `Get` | 表态用的表情（飞书表情的英文名，例如 `Get`（收到）/ `DONE` / `OK` / `OnIt`） |
+| `feishu.reactionScope` | `all` | `all` = 每一条收到的消息都表态；`addressed` = 只对 @ 了机器人的表态（热闹的群用这个） |
 | `feishu.ask.maxAsks` / `ttlMs` | `1` / 30 分钟 | 追问次数与过期 |
 | `repos.roots` | `{}` | 仓库名 → 本地检出路径（仓库索引要扫真实目录） |
 | `repos.ciTimeoutMs` / `requiredApprovals` / `autoMerge` | 30 分钟 / 1 / `false` | `ci_stuck` 判定线、合并前至少几个审批、自动合并 |
 
-完整清单（56 个键）见 `config.example.json`；面板可编辑 26 项。
+完整清单见 `config.example.json`（76 个叶子键，`//` 开头的注释键不算）；面板可编辑 26 项。
 
 ---
 
@@ -424,7 +426,7 @@ team recall query=退避
 
 - **先读**：`docs/DESIGN.md`（现状架构、每条链路的失败行为、12 条不变量、代码地图、改动指引）。
 - **改之前**：`docs/DESIGN.md` §19「改动指引」写了"要改什么、去哪里、别忘了什么"。
-- **测试**：`npm test`（518 个用例）。**整套请走 `npm test`**——它会把 `DSH_HOME` 指向一个空目录，
+- **测试**：`npm test`（527 个用例）。**整套请走 `npm test`**——它会把 `DSH_HOME` 指向一个空目录，
   让用例不读你本机真实的配置。面板的渲染用例是可选的（`TEAM_CLIENT_TEST_MODULES` 指向装好
   react/react-dom/jsdom 的目录）。
 - **审查历史**：`docs/REVIEW-01.md`（22 条）与 `docs/REVIEW-02.md`（25 条）记录了发现、修法、
