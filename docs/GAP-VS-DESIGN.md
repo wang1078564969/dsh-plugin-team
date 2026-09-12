@@ -1,6 +1,12 @@
 # 与设计文档的差距（可核对版）
 
-这份表回答一个问题：**`team-agent-architecture/` 里设想的东西，插件现在做到了多少。**
+> ⚠️ **这份表是历史的对账记录，不是需求。** 现行的需求见 `docs/REQUIREMENTS.md`；
+> 它对比的那套 `team-agent-architecture/` 是**做错的那版需求**（载体被写成自建 Hub 平台），
+> **已作废、仅作取证**。本表的价值在于：它记录了"旧设想 → 逐批修复"的过程与理由。
+> 表里那些 ✅/🟡/❌ 是**当时**的判定，后来的实现会推翻其中的一部分 ——
+> 想查现状请用 `REQUIREMENTS.md` 的状态列或 `../team-agent-architecture/09-implementation-status.md`。
+
+这份表回答一个问题：**`team-agent-architecture/` 里设想的东西，插件当时做到了多少。**
 每一行都带代码证据（`file:line`）或明确的"找不到"。它取代凭印象的"差不多了"。
 
 ## 怎么读
