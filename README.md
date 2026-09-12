@@ -7,8 +7,9 @@ DSH 的团队协作层：**需求 / 任务 / 两道人工确认 / 租约 / 决�
 
 ## 现在能跑什么
 
-> 想看"现在到底是什么样"（架构、数据模型、每条链路的失败行为、不变量）读 `docs/DESIGN.md`；
-> 想看"还差什么"读 `docs/REVIEW-01.md`（第一轮审查，22 条发现）与 `docs/GAP-VS-DESIGN.md`。
+> - **要用它** → [`docs/USER-GUIDE.md`](docs/USER-GUIDE.md)（使用说明书：装/配/群里怎么用/面板六个页签/排障手册）
+> - **要改它** → [`docs/DESIGN.md`](docs/DESIGN.md)（现状：架构、数据模型、每条链路的失败行为、12 条不变量、改动指引）
+> - **想知道还差什么** → [`docs/REVIEW-01.md`](docs/REVIEW-01.md)、[`docs/REVIEW-02.md`](docs/REVIEW-02.md)、[`docs/GAP-VS-DESIGN.md`](docs/GAP-VS-DESIGN.md)
 
 一句话：**群里说一句话 → 变成需求对象 → 拆任务 → 两道确认 → 交给执行会话跑一轮 → 汇报回写成证据 → 提交验收**，
 并且在 DSH GUI 里有一块台账面板可以看和点。整条链路都在真实 harness / 真实飞书凭据上验过（见「实测」）。

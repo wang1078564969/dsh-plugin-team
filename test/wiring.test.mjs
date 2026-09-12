@@ -342,12 +342,18 @@ test('日报：摘要桶按群聚合，并把「现在有什么在等你」现�
       id: 'req-2026-001', title: '支付重试', state: 'dispatched',
       origin: { surface: 'feishu', chat_id: 'oc_a', excerpts: [] },
     })
+    const gate = (requiredBy, confirmedBy) => ({
+      required_by: requiredBy, confirmed_by: confirmedBy, due_at: null, not_applicable: false,
+      timeout_snapshot: '4h', on_timeout: 'remind_then_escalate', max_release: null,
+    })
     store.put('task', {
       id: 'task-1', req: 'req-2026-001', title: '实现退避', state: 'assigned', domains: ['development'],
-      gates: [
-        { name: 'accept', state: 'pending', required_by: ['human:zhouyu'], satisfied_by: [] },
-        { name: 'start', state: 'satisfied', required_by: ['human:zhouyu'], satisfied_by: ['human:zhouyu'] },
-      ],
+      // `gates` 是**一张表**（不是数组），状态由 gateSatisfied 算 —— 这条用例以前喂的是
+      // 一个不存在的形状，于是"待确认"那段代码即使写错了也照样绿。
+      gates: {
+        accept: gate(['human:zhouyu'], []),
+        start: gate(['human:zhouyu'], [{ by: 'human:zhouyu', at: '2026-09-12T09:00:00.000Z' }]),
+      },
     })
     // 另一个群没有待办、也没有摘要：日报不该为它发一条空卡。
     store.put('chat', { id: 'oc_empty', chat_type: 'group', app_id: 'cli_x', primary_bot_id: 'req', messages: 0 })
@@ -361,7 +367,7 @@ test('日报：摘要桶按群聚合，并把「现在有什么在等你」现�
     )
     const text = JSON.stringify(card)
     assert.match(text, /日报 2026-09-12/)
-    assert.match(text, /待确认 task-1：实现退避 —— accept：等 human:zhouyu/)
+    assert.match(text, /待确认 task-1：实现退避 —— 接受：等 human:zhouyu/)
     assert.equal(text.includes('start：等'), false, '已经确认的门禁不该再催一遍')
 
     // 桶取走之后就空了：同一条进度不会今天、明天各说一次。
