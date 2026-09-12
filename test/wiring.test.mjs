@@ -159,7 +159,8 @@ test('every message in a group is recorded under that group\'s primary bot', asy
       ],
       feishu: { mode: 'off', appId: 'cli_x', appSecret: 's' },
     })
-    const controller = ctx.teamFeishu
+    // 接缝在模块作用域上，不在 ctx 上：真 Cordis 上下文拒绝未声明的属性赋值。
+    const controller = team.feishuSeam
     assert.notEqual(controller, undefined, 'the controller is reachable for testing')
     const store = controller.store
 
@@ -228,7 +229,8 @@ test('an inbound image is downloaded, stored as asset://, receipted — and dedu
       bots: [{ id: 'req', displayName: '需求机器人', role: 'req', enabled: true }],
       feishu: { mode: 'off', appId: 'cli_x', appSecret: 's' },
     })
-    const controller = ctx.teamFeishu
+    // 接缝在模块作用域上，不在 ctx 上：真 Cordis 上下文拒绝未声明的属性赋值。
+    const controller = team.feishuSeam
     const downloads = []
     // 入站资源走 `clientForChat(chatId)` 解析出来的客户端：替换它的 download。
     controller.state.client = {
@@ -318,7 +320,8 @@ test('日报：摘要桶按群聚合，并把「现在有什么在等你」现�
       bots: [{ id: 'req', displayName: '需求机器人', role: 'req', enabled: true }],
       feishu: { mode: 'off', appId: 'cli_x', appSecret: 's' },
     })
-    const controller = ctx.teamFeishu
+    // 接缝在模块作用域上，不在 ctx 上：真 Cordis 上下文拒绝未声明的属性赋值。
+    const controller = team.feishuSeam
     const store = controller.store
     const sent = []
     controller.state.client = {

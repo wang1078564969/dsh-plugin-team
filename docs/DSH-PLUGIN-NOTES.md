@@ -877,3 +877,55 @@ A 应用的投递里需求机器人回答了，B 应用的投递里开发机器�
 `GET` 回来六台机器人**每台都带着自己的 `feishu.appId`**，整份响应里没有"默认应用"四个字；
 用面板编辑器会发的那份 patch 保存 → `applied: ["bots","feishu"]`，密钥落到应用条目、
 `feishu.appSecret` 从文件里迁走，`bots[0].feishu.appId` 落盘成显式值。
+
+---
+
+## 19. `ctx` 是带守卫的代理：**不要往它身上写属性**（2026-09-12 线上事故）
+
+一条测试接缝差点让整个插件在真实宿主里起不来。写错的那一行就是：
+
+```js
+if (ctx !== null && typeof ctx === 'object') ctx.teamFeishu = feishu   // ✗ 真 ctx 会抛
+```
+
+真宿主里的报错是 `cannot set property "teamFeishu" without provide`，来自 `@deepseek-ai/cordis`
+的 ctx 代理 `set` 陷阱（`lib/index.js` 的 `ReflectService.handler.set`）。源码里的判据值得逐字记住：
+
+```js
+set: (target, prop, value, ctx) => {
+  if (isSpecialProperty(prop)) return Reflect.set(target, prop, value, ctx)   // symbol / then / prototype / 数字串 / 下划线开头
+  const error = new Error(`cannot set property "${prop}" without provide`)
+  const def = target.reflect.props[prop]
+  if (!def) {
+    if (!ctx.fiber.runtime) return Reflect.set(target, prop, value, ctx)      // ← 只有"没在跑的 fiber"才放行
+    throw enhanceError(error)
+  }
+  …
+}
+```
+
+三个要点，每一个都让这个坑更难自己发现：
+
+1. **只有 `provide` 过的名字（或 accessor）能赋值**。想挂一个自己的东西，用 `ctx.provide()`/服务，
+   或者干脆放**模块作用域**（本插件的 `api`/`configApi`/`logsApi`/`feishuSeam` 就是后者）。
+2. **抛不抛取决于 `ctx.fiber.runtime`**：`new Context()` 这种裸上下文的 runtime 为空，赋值会
+   **静默成功** —— 于是"我本地试了一下没事"完全不能作数。走 `ctx.plugin(plugin, config)`
+   才是与 loader 同一条路径。
+3. **测试替身会让它永远绿**。用例里的假 ctx 是普通对象，`ctx.xxx = …` 当然收下。
+   这类错误的形状因此是：**测试全绿，宿主里整个插件不激活**。
+
+后果为什么特别难查：本插件的入口是 boot-safe 的（§2），激活失败只写日志、不抛，所以宿主活着、
+面板（浏览器半边是静态脚本）也照常渲染，只是**一个接口都不在** —— 使用者看到的是
+"读取失败：HTTP 404 的响应不是 JSON"，像路由写错了，而真相在 `~/.dsh/team/load-report.txt` 里。
+
+**两条防御，都已经落地：**
+
+- `test/activation.test.mjs` 用**真 Cordis 上下文**（`ctx.plugin()`）把发布的那一行挂一遍：
+  断言 entry 不抛、工具注册、四条路由挂上、台账路由真的回 JSON；另一条用例把"一激活就写 ctx
+  未声明属性"的坏实现放进临时目录，验证这一行没把宿主带下去、且自述路由说出了原因。
+- 入口自己挂 `GET /api/team/boot`（`lib/index.js` 的 `bootRoute()`）：**它不依赖实现是否活着**，
+  失败时返回 `{ok:false, phase, message, hint}`（只吐首行，堆栈留在磁盘上）。
+  面板在台账路由 404 时会探它，把真话直接写在页面上 —— 这正是当年缺的那一环。
+
+**判别方法**：功能"该有却没有、日志里也没有错误"，且面板接口全 404 时，先看
+`load-report.txt`；写代码时记住 `ctx` 不是可以随便挂东西的对象。

@@ -87,15 +87,16 @@ test('the ledger route is mounted even though ctx.get("connection") yields nothi
     assert.equal(ctx.registered.tools[0].name, 'team')
 
     /*
-     * And all THREE routes must be up — through inject, not through the probe:
-     * the ledger the panel shows, the configuration it edits, and the logs it
-     * tails（静态的走配置、滚动的走日志：配置快照每 3 秒重算一遍名册与自检
-     * 是浪费，自检还会真调飞书）。
+     * And all FOUR routes must be up — through inject, not through the probe:
+     * the entry's own boot self-report, the ledger the panel shows, the
+     * configuration it edits, and the logs it tails（静态的走配置、滚动的走日志：
+     * 配置快照每 3 秒重算一遍名册与自检是浪费，自检还会真调飞书）。
      */
     const paths = ctx.registered.routes.map((route) => route.path).sort()
-    assert.deepEqual(paths, ['/api/team/config', '/api/team/ledger', '/api/team/logs'])
+    assert.deepEqual(paths, ['/api/team/boot', '/api/team/config', '/api/team/ledger', '/api/team/logs'])
     for (const route of ctx.registered.routes) {
-      assert.deepEqual(route.methods, ['GET', 'POST'], route.path)
+      // 自述路由只有 GET（它不改任何东西），其余三条读写都要。
+      assert.deepEqual(route.methods, route.path === '/api/team/boot' ? ['GET'] : ['GET', 'POST'], route.path)
       assert.equal(route.requestBody, 'buffered', route.path)
       assert.equal(typeof route.fetch, 'function', route.path)
     }

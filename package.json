@@ -38,6 +38,9 @@
       "optional": false
     }
   },
+  "devDependencies": {
+    "@deepseek-ai/cordis": "^4.0.2"
+  },
   "scripts": {
     "test": "node test/run-all.mjs"
   },

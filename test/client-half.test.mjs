@@ -132,11 +132,28 @@ test('the bundle talks to exactly the routes the host mounts', () => {
   const code = source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^[ \t]*\/\/.*$/gm, '')
   const urls = [...code.matchAll(/['"`](\/[A-Za-z0-9._\-/]*)['"`]/g)].map((match) => match[1])
   const routes = [...new Set(urls.filter((url) => url.startsWith('/api/')))]
-  // Exactly the routes the host mounts, and nothing else: the ledger the
-  // panel shows, and the configuration it edits. Both sit behind the same
-  // authenticated /api fence.
-  assert.deepEqual(routes.sort(), ['/api/team/config', '/api/team/ledger', '/api/team/logs'])
+  /*
+   * Exactly the routes the host mounts, and nothing else: the ledger the panel
+   * shows, the configuration it edits, the log page it tails — and the entry's own
+   * boot self-report, which is the one that must exist even when the host half is
+   * dead (that is the only situation it exists for).
+   */
+  assert.deepEqual(routes.sort(), ['/api/team/boot', '/api/team/config', '/api/team/ledger', '/api/team/logs'])
   assert.equal(/host\.call/.test(code), false, 'a shipped half has no host.call — reaching for it fails at runtime')
+})
+
+test('the panel probes the boot route the entry actually mounts', async () => {
+  /*
+   * 面板在 404 时会去问 entry「你到底起没起来」，路径写死在两个文件里。
+   * 这里是逐字比对：`lib/index.js` 的 `bootRoute()` 是唯一的真相，客户端那边
+   * 只要写错一个字符，探测就会静默失效 —— 面板又回到只有一句"HTTP 404"的样子，
+   * 而那正是这条路由要消灭的画面。
+   */
+  const entry = await import('../lib/index.js')
+  const route = entry.bootRoute({ ok: true, phase: 'ok', at: '2026-01-01T00:00:00.000Z', detail: '' })
+  const source = readFileSync(CLIENT_PATH, 'utf8')
+  assert.ok(source.includes(`'${route.path}'`), 'the client must probe ' + route.path)
+  assert.deepEqual(route.methods, ['GET'])
 })
 
 /*

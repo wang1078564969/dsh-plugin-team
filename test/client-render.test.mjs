@@ -531,6 +531,42 @@ async function runChecks({ JSDOM, require }) {
   await act(async () => { await Promise.resolve() })
   ok(text().indexOf('快照失败：store 读不出来') >= 0, 'GET ok:false 的 message 被展示')
 
+  /*
+   * 404：**看不见的那一半可能压根没起来**。
+   *
+   * 这是 2026-09-12 那次事故的画面：插件行挂着、面板渲染得好好的，宿主半边却在激活时
+   * 抛了 —— 一个接口都不在。屏幕上原本只剩「读取失败：HTTP 404」，像路由写错了。
+   * 现在面板会去问入口自己的 `/api/team/boot`，并把真话写在页面上。
+   */
+  queue = [
+    { status: 404, notJson: true },
+    {
+      status: 200,
+      payload: {
+        ok: false,
+        phase: 'activate',
+        at: '2026-09-12T12:29:24.565Z',
+        message: 'cannot set property "teamFeishu" without provide',
+        hint: '完整堆栈见 /Users/x/.dsh/team/load-report.txt',
+      },
+    },
+  ]
+  await act(async () => { click(button('刷新')) })
+  await act(async () => { await Promise.resolve() })
+  await act(async () => { await Promise.resolve() })
+  ok(requests[requests.length - 1].url.indexOf('/api/team/boot') >= 0, '404 之后去探入口的自述路由')
+  ok(text().indexOf('宿主半边没能起来') >= 0, '页面上说清是宿主半边没起来，而不是只报 404')
+  ok(text().indexOf('without provide') >= 0, '真原因原文出现在页面上')
+  ok(text().indexOf('load-report.txt') >= 0, '并且指路到完整堆栈')
+
+  /* 自述路由自己也 404（旧版本插件）：**不编原因**，保留原来那句保守说明 */
+  queue = [{ status: 404, notJson: true }, { status: 404, notJson: true }]
+  await act(async () => { click(button('刷新')) })
+  await act(async () => { await Promise.resolve() })
+  await act(async () => { await Promise.resolve() })
+  ok(text().indexOf('宿主半边没能起来') < 0, '探不到就不编原因')
+  ok(text().indexOf('404') >= 0, '仍然如实报 404')
+
   /* ---------------- 8. 长动作进行中 ---------------- */
 
   section('8. run_task 进行中：按钮禁用 + 明确的「已 N 秒」')

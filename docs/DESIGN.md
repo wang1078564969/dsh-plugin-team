@@ -23,7 +23,7 @@
 持久化是**一对象一文件的 JSON 台账**加几份 append-only 的 jsonl；并发靠"单一写入者 + 每 card_key 串行化"。
 
 体量：`lib/` 共 39 个模块 / 约 23.1k 行（其中浏览器半边 `client.js` 4.9k 行是手写经典脚本），
-`test/` **36 个文件约 19.2k 行，514 个用例**（`wc -l` 实测，2026-09-12 第二轮审查后）。
+`test/` **38 个文件约 14.5k 行，518 个用例**（`wc -l` 实测，2026-09-12 修复事故后）。
 
 ---
 
@@ -44,13 +44,13 @@
 
 ### 2.2 入口刻意很小，而且**两层兜底**
 
-`lib/index.js`（169 行）只做三件事，每件都有一条踩过的坑：
+`lib/index.js` 只做三件事，每件都有一条踩过的坑：
 
 | 它做的事 | 为什么必须这样 |
 |---|---|
 | 在 `apply()` **内部**动态 import `lib/team.js`（带 mtime 查询串） | Cordis 只 import 一次、Node 缓存模块：模块级 import 会把实现冻结在进程启动时那一版，改代码必须重启。带 mtime 的动态 import 让"保存即生效"成立 |
 | import 或激活失败只**记日志并吞掉**（不 throw） | harness 的启动审计会把失败 row 的错误**重新抛出**，一个抛异常的插件能拖垮整个 harness。协作层绝不能有这个能力 |
-| 把实现发布的 Fetch 路由挂到 `connection` 服务上（`ctx.inject(['connection'], cb)`） | 一是 `ctx.get('connection')` 在 web profile 里会**采样过早**（服务比最后一层 row 的 `apply()` 晚提供）→ 面板能渲染但路由 404；二是挂在 connection 的 `/api` 后面才有浏览器鉴权，否则一个能建任务、确认门禁的端点等于远程遥控 |
+| 把实现发布的 Fetch 路由**外加一条不依赖实现的自述路由**挂到 `connection` 服务上（`ctx.inject(['connection'], cb)`） | 一是 `ctx.get('connection')` 在 web profile 里会**采样过早**（服务比最后一层 row 的 `apply()` 晚提供）→ 面板能渲染但路由 404；二是挂在 connection 的 `/api` 后面才有浏览器鉴权，否则一个能建任务、确认门禁的端点等于远程遥控；三是"这次加载成没成"必须有一条**实现死掉时仍然在**的接口（§14.1） |
 
 `inject` 只声明 `tools`，因为 `ctx.tools.register` 是**属性访问**，追踪代理要求先声明；
 其余服务（`agents`、`timer`、`connection`、`sessionQuery`、`tokenMeter`、`workspaceRegistry`）
@@ -63,7 +63,7 @@
 | `tools`（**唯一声明**的） | 注册 `team` 工具 | 没有它插件没有意义（声明它是对的） |
 | `agents` | 起/复用执行会话（`lib/exec.js`） | `run_task` 返回 `session_unavailable`，其余功能照常 |
 | `timer` | 门禁扫描、补发节流卡、日报、去重表清理 | 所有这些"到点发生的事"不发生，其余照常；日志里说明是缺 timer |
-| `connection` | 挂三个 `/api/team/*` 路由 | 面板读不到数据（工具照常） |
+| `connection` | 挂四个 `/api/team/*` 路由（含 entry 自己那条自述路由，见 §14.1） | 面板读不到数据（工具照常） |
 | `sessionQuery` | 回忆里的**情景记忆**（跨会话全文检索） | `recall` 如实说"这一半没查"，文档与台账照常 |
 | `tokenMeter` | 卡片 footer 的 token 数 | 那一段不显示（不写 0） |
 | `workspaceRegistry` | 让机器人的会话出现在主机 DSH 客户端 | 会话不登记，其余照常 |
@@ -97,7 +97,7 @@
                  └──────────┬───────────┘        └────────┬───────────┘
                             ▼                             ▼
                  ┌──────────────────────┐        ┌────────────────────┐
-                 │ store：一对象一文件   │        │ 三个 /api/team/*   │
+                 │ store：一对象一文件   │        │ 四个 /api/team/*   │
                  │ <dataDir>/{requirements,tasks,…}│（面板读与写）      │
                  └──────────────────────┘        └─────────┬──────────┘
                                                            ▼
@@ -187,7 +187,7 @@
 
 `lib/domain/`（约 2.8k 行，从 hub 移植成纯 ESM JS、零依赖）：
 `requirement` / `task` / `lease` / `decision` 的 schema（`schema.js` 1279 行）、
-两个状态机（`machine.js` 845 行）、门禁快照与三条硬闸（`objects.js`）、租约（`lease.js`）、
+两个状态机（`machine.js` 891 行）、门禁快照与三条硬闸（`objects.js`）、租约（`lease.js`）、
 超时扫描（`scheduler.js`）。
 
 **门禁快照是冻结的**：任务创建时把四道门禁的**超时与策略**抄进任务对象，此后改配置**不影响进行中的任务** ——
@@ -395,11 +395,28 @@
 ## 14. 浏览器半边
 
 `lib/client.js` 是**手写的经典脚本**（4.9k 行，无构建、无 JSX、无 ESM）：注册侧栏入口与中心面板，
-数据全部走三个 `/api/team/*` 路由。六个页签：**台账 / 配置 / 机器人 / 成员 / 会话 / 日志**。
+数据全部走四个 `/api/team/*` 路由。六个页签：**台账 / 配置 / 机器人 / 成员 / 会话 / 日志**。
 
 约束（改了会直接坏）：不能用 `import`/`export`/JSX；`React.createElement` 是全部词汇；
 页面读不到宿主的任何对象，**只能读接口给的 JSON**；
 所有写操作必须带 `actor`（接口层拒绝没有 actor 的写）。
+
+### 14.1 面板 404 时，它自己去问"你到底起没起来"
+
+四条路由里有一条不属于实现，属于**入口**：`GET /api/team/boot`（`lib/index.js` 的 `bootRoute()`）。
+它回这次加载的结果（`{ok, phase, at, message, hint}`），并且**只在实现整个死掉时才有用** ——
+因为那正是另外三条都不在的时候。
+
+为什么需要它：entry 的 boot-safe（§2.2）是"失败只记录、不抛"，代价是失败**完全不可见**。
+浏览器半边是静态脚本，宿主半边一行代码都没跑起来时，面板照常渲染、页签都在，只有一个接口一个都不在。
+使用者看到的画面是"读取失败：HTTP 404 的响应不是 JSON"，看着像路由写错了。
+2026-09-12 的事故就是这一种（`ctx.teamFeishu = feishu` 这一行测试接缝：假 ctx 收下了，
+真 ctx 抛 `cannot set property "teamFeishu" without provide`），当时唯一的证据在
+`load-report.txt` 里，而没人知道要去看它。现在面板在 404 时会探这条路由，把真话直接写在页面上。
+
+它只吐失败的**首行**，完整堆栈留在 `load-report.txt` 与日志页；状态码固定 200（请求成功了，
+失败的是这次加载；回 5xx 会让面板把它说成"接口坏了"）。两个文件里的路径由
+`test/client-half.test.mjs` 逐字比对。
 
 ---
 
@@ -419,6 +436,8 @@
 | 10 | 观测指标的分母只数成功 | 失败混进降级率会让它假性变好 |
 | 11 | 密钥只写不读、日志写入前脱敏 | 密钥进文件、进页面 |
 | 12 | 写操作必须带 actor | 门禁被一个下拉框绕过 |
+| 13 | 生产路径**不往 `ctx` 上写属性**（测试接缝放模块作用域） | 真 ctx 拒绝未声明的属性，`apply()` 整个抛出：长连接不起、路由不挂，而面板照常渲染（2026-09-12 的事故，见 §14.1） |
+| 14 | 入口自带自述路由，**不依赖实现是否活着** | 失败时唯一能解释原因的那条接口也一起没了 |
 
 ---
 
@@ -435,18 +454,23 @@
 | 没有 `timer` | 门禁超时不扫描、节流不补发、日报不发；日志说明 |
 | 没有 `sessionQuery` | `recall` 的门票少一半，如实说明 |
 | 文件坏了（inbox/assets 索引） | 能读多少读多少，坏行报错但不让整个功能不可用 |
+| **实现整个激活失败**（load/activate 抛出） | 这一行仍 active（宿主不受影响），`load-report.txt` + 日志 + 终端三处留痕；面板 404 时靠 `/api/team/boot` 把原因写在页面上（§14.1） |
 
 ---
 
 ## 17. 测试策略
 
-- **零依赖**：`npm test` = `node test/run-all.mjs`，34 个文件 494 个用例，跑的是真实模块（不是 mock 世界）。
+- **零依赖**：`npm test` = `node test/run-all.mjs`，37 个文件 518 个用例，跑的是真实模块（不是 mock 世界）。
 - **可选渲染测试**（4 个文件）：真 react + jsdom 把面板渲出来、真点击、真断言 POST body；
   没装就跳过（`TEAM_CLIENT_TEST_MODULES` 指向任意装好它们的目录）。
 - **oracle 差分**：领域层用 hub 的 zod 实现当参照做了 12 368 例差分；分诊/提取层做过 0 差异差分。
 - **走真实入站路径的用例**：喂伪造飞书事件走 `handleInbound`（记录、定主、资产、去重都在这条路上验）。
 - **每个"踩过的坑"都有一条用例**：两张卡的竞态、改派不重置门禁、footer 丢失、失败停在加载态、
   点筛选读到旧条件、重投重复下载、需求收口断路、自动释放的死任务、按钮关不掉的死按钮。
+- **真 Cordis 上下文里挂一遍**（`test/activation.test.mjs`）：走 `ctx.plugin()`（与 loader 同一条路径，
+  所以 `ctx.fiber.runtime` 是真的），断言 entry 不抛、`team` 工具注册、四条路由挂上、**台账路由真的回 JSON**；
+  另有一条把"实现一激活就写 `ctx` 未声明属性"的坏实现放在临时目录里，验证这一行**没有**把宿主带下去、
+  且自述路由说出了原因。用假 ctx 的用例发现不了这类错误：假 ctx 什么都不拒绝。
 - **与机器无关**：`test/run-all.mjs` 把 `DSH_HOME` 指向一个空临时目录。以前有若干用例
   没传 `dataDir`，于是它们读的是**开发者本人的真实 `config.json`** —— 测试结果与这台机器有关，
   而这会让别的缺陷时隐时现。
@@ -459,19 +483,18 @@
 
 | 模块 | 行数 | 职责 |
 |---|---|---|
-| `lib/client.js` | 4984 | 浏览器半边：手写经典脚本，侧栏入口 + 六个页签 |
+| `lib/client.js` | 5042 | 浏览器半边：手写经典脚本，侧栏入口 + 六个页签 |
 | `lib/tools.js` | 2100+ | `team` 工具的**全部 39 个动作**（台账、门禁、执行、CI、仓库、文档、回忆），以及三条横切规则：未知 action → `bad_request`、调用方是执行会话 → 拒绝（worker 不得改台账）、handler 抛错 → `handler_failed` |
 | `lib/domain/schema.js` | 1279 | 四类对象的 schema 与校验（逐字对照 hub，含 `.strict()`） |
-| `lib/domain/machine.js` | 873 | 两个状态机（含 CI 与归档的身份守卫） |
+| `lib/domain/machine.js` | 891 | 两个状态机的动作表、效果、身份守卫与 `availableActions` |
 | `lib/feishu/broadcast.js` | 1038 | 播报决策、节流、聚合、@配额、卡片构造 |
-| `lib/team.js` | 1001 | Feishu 控制器：连接池、入站分发、群记录、日报、接线 |
-| `lib/domain/machine.js` | 845 | 两个状态机的动作表与效果 |
+| `lib/team.js` | 1114 | Feishu 控制器：连接池、入站分发、群记录、日报、接线 |
 | `lib/feishu/ingest.js` | 748 | 入站流水线（去重、命令、分诊→提取→建单） |
 | `lib/settings.js` | 737 | 配置台 host 半边：校验/原子写/审计/自检 |
 | `lib/feishu/cards.js` | 723 | 卡片渲染与五级降级链、发送边界 |
 | `lib/feishu/extract.js` | 642 | 从一段话里抽出需求要素与相似度 |
 | `lib/bots.js` | 633 | 机器人名册、能力、作用域、路由与定主 |
-| `lib/api.js` | 593 | 三个 HTTP 路由（台账 / 配置 / 日志） |
+| `lib/api.js` | 641 | 三个 HTTP 路由（台账 / 配置 / 日志）；第四条 **入口自述** 路由在 `lib/index.js`（§14.1） |
 | `lib/docs.js` | 596 | 文档载体：frontmatter、索引、陈旧检测 |
 | `lib/feishu/connection.js` | 601 | 长连接、事件规范化、富文本与资源提取 |
 | `lib/exec.js` | 566 | 执行会话池：起/复用/驱动/等一轮结束 |
@@ -492,7 +515,7 @@
 | `lib/domain/scheduler.js` | 215 | 门禁与租约的超时扫描 |
 | `lib/workspace.js` | 213 | 把机器人的会话挂进主机 DSH 的会话列表 |
 | `lib/sessions.js` | 211 | 会话身份（机器人 × 群）与消息记录 |
-| `lib/index.js` | 169 | 入口：boot-safe + 动态 import + 挂路由 |
+| `lib/index.js` | 247 | 入口：boot-safe + 动态 import + 挂路由（含 `GET /api/team/boot` 自述路由） |
 | `lib/domain/index.js` | 158 | 领域层 barrel |
 | `lib/feishu/apps.js` | 151 | 按飞书应用分组（一 app 一连接一身份） |
 | `lib/tasktypes.js` | 141 | 任务类型 → 域映射（10 域 / 9 类型） |

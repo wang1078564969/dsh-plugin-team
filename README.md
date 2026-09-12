@@ -17,7 +17,7 @@ DSH 的团队协作层：**需求 / 任务 / 两道人工确认 / 租约 / 决�
 | 文件 | 状态 |
 |---|---|
 | `package.json` / `cordis.patch.yml` | ✅ 按 DSH 插件约定；装包即装插件（含 `dsh.client` 浏览器半边） |
-| `lib/index.js` | ✅ boot-safe 入口：加载失败只记日志，**绝不拖垮 harness**（真实 harness 里验过）；挂台账路由 |
+| `lib/index.js` | ✅ boot-safe 入口：加载失败只记日志，**绝不拖垮 harness**（真 Cordis 上下文里验过）；挂四条路由，其中 `GET /api/team/boot` 是**入口自述**（实现死掉时它还在，面板据此把 404 的真话写在页面上） |
 | `lib/domain/`（3.4k 行） | ✅ hub 的领域层移植成纯 ESM JS、零依赖：两个状态机、门禁快照、三条硬闸、租约、超时扫描 |
 | `lib/store.js` | ✅ 一对象一文件的 JSON 台账（原子写、按 kind 决定身份字段、两套 ID 规则） |
 | `lib/config.js` | ✅ 配置解析（env > 配置文件 > row config > 默认值） |
@@ -43,7 +43,7 @@ DSH 的团队协作层：**需求 / 任务 / 两道人工确认 / 租约 / 决�
 | `lib/docs.js` | ✅ **文档载体**（设计 01 §4）：frontmatter 是硬要求（缺 owner 不写）、`docs/index.md` 与 `_meta/docs.json` 可重建、`supersedes`/`related` 的陈旧检测 |
 | `lib/recall.js` | ✅ **回忆**：一次提问同时查工作区文档、DSH 会话历史（`ctx.sessionQuery`）与台账；**不建自建记忆库**（设计 07 §0.3） |
 | `lib/repos.js` | ✅ **Git/MR/CI 对接**（设计 03）：分支与 `Req:`/`Task:` trailer 约定、CI 状态机与 `ci_stuck`、合并三道门判定、敏感文件、仓库知识索引 |
-| `test/` | ✅ 514 个用例全绿（`npm test`），另有 4 个**可选**的渲染测试（见「实测」第 8 条） |
+| `test/` | ✅ 518 个用例全绿（`npm test`），另有 4 个**可选**的渲染测试（见「实测」第 8 条） |
 | 记忆 / skills 库 / 角色 preset 自动生成 | ⬜ 设计文档 07 与 02 §1.2，尚未落进插件 |
 
 ## 三个一等对象：机器人 / 成员 / 会话
@@ -489,8 +489,17 @@ JSON 而不是数据库是**有意的**：出问题时人得能 `cat` 一个需�
     **没有运行态字段泄漏**。指名一个没配密钥的应用 → `invalid_config` + `bots[1].feishu.appId`，
     文件一个字节都没变；已删除的 `feishu.chatIds` → 明确拒绝并指向 `bots[].feishu.chats`。
 
-本地测试：`npm test` → **498 passed / 0 failed / 16 skipped**（跳过的是**可选**渲染测试组：台账页 / 配置页 /
-机器人·成员·会话三页 / 日志页，`npm i -D react react-dom jsdom` 后即跑 → **514 passed / 0 failed / 0 skipped**）。
+11. **实现整个死掉时，只有那一行活着，而且它说了真话**（`test/activation.test.mjs`，真 Cordis 上下文）：
+   把入口复制到临时目录、旁边放一个"一激活就给 `ctx` 写未声明属性"的 `team.js`（就是 2026-09-12
+   真实写错的那一行）→ 该行仍然 **active**（宿主没被带下去）、`/api/team/boot` 回
+   `{ok:false, phase:'activate', message:'cannot set property "teamFeishu" without provide'}`、
+   台账路由**不存在**、`load-report.txt` 与 `logs/team.jsonl` 各留一条。
+   正常路径同样在真上下文里跑：`team` 工具注册、四条路由挂上、`GET /api/team/ledger` →
+   **200 + JSON 快照**。这条用例补的是一个测试盲区：**假 ctx 什么都不拒绝**，所以
+   `ctx.xxx = ...` 这类写在"全绿"的用例里永远看不见。
+
+本地测试：`npm test` → **502 passed / 0 failed / 16 skipped**（跳过的是**可选**渲染测试组：台账页 / 配置页 /
+机器人·成员·会话三页 / 日志页，`npm i -D react react-dom jsdom` 后即跑 → **518 passed / 0 failed / 0 skipped**）。
 领域层另外用 hub 的 zod 实现当 oracle 做了 12 368 例差分（校验层 307 例逐字一致）；
 分诊/提取层也做了 0 差异差分。
 
