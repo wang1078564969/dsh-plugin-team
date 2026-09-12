@@ -443,15 +443,37 @@ team recall query=退避
   以及**被证伪的假设**——后者能省掉你重复排查的时间。
 - **已知缺口**：`docs/GAP-VS-DESIGN.md`（对设计文档的差距矩阵）与 `docs/DESIGN.md` §18。
 
-### 14.1 改完 `lib/*.js`，怎么让它生效（两个办法，都实测过）
+### 14.1 改完 `lib/*.js`，怎么让它生效（**先看清是哪一类改动**）
 
-**办法一：重启宿主。** 最稳，任何时候都对。
+| 你改的是 | 生效办法 |
+|---|---|
+| `lib/team.js` | 可以**不重启**：重载这一行即可（下面「办法二」） |
+| `lib/` 下**其它任何文件**（`index.js`、`config.js`、`bots.js`、`feishu/*.js`…） | **必须重启**宿主 |
+| `lib/client.js`（面板那一半） | 宿主重启或重载后**刷新浏览器**（它是从磁盘按 rev 下发的） |
 
-**办法二：不重启，让这一行就地重载。** 这个 profile 的 `package.json` 里写着
-`dsh.profile.patchReload: "live"`，DSH 会**监听** `profiles/<名>/cordis.patch.yml`（以及
-`$DSH_HOME/cordis.patch.yml`）；那个文件一变，loader 就重跑 `team` 这一行的 `apply()`，
-而入口用 `lib/team.js` 的 **mtime 当查询串**重新 import —— 于是磁盘上的新代码立刻生效，
-GUI 会话、其它插件都不受影响：
+**为什么只有 `team.js` 能热重载**：入口是这样导入实现的 ——
+
+```js
+implementation = await import(url.href)     // url 带 ?v=<lib/team.js 的 mtime>
+```
+
+所以每次重载都会拿到**新的 `team.js`**。但 `team.js` 里的 `import './bots.js'` 这类**静态导入**
+是普通说明符，解析出来的 URL 不含版本号；Node 的 ESM 缓存按 URL 命中，**依赖不会跟着刷新** ——
+它们停在进程启动那一刻的版本。实测（同一进程内）：
+
+```
+① 启动时载入 main.mjs?v=1        → dep=v1
+② 改掉 dep.mjs，再载入 main.mjs?v=2 → dep=v1   ← 依赖还是旧的
+```
+
+入口 `lib/index.js` 本身也一样：loader 按路径导入它，进程内只导入一次，重载时**重跑的是启动时那一版**。
+
+**办法一：重启宿主。** 最稳，任何时候都对（改了 `lib/` 下任何文件都建议直接用它）。
+
+**办法二（只对 `team.js` 有效）：不重启，让这一行就地重载。** 这个 profile 的
+`package.json` 里写着 `dsh.profile.patchReload: "live"`，DSH 会**监听**
+`profiles/<名>/cordis.patch.yml`（以及 `$DSH_HOME/cordis.patch.yml`）；那个文件一变，
+loader 就重跑 `team` 这一行的 `apply()`：
 
 ```console
 # 在那个 patch 文件末尾（顶层数组里）临时加一条"有实际差异"的条目，保存即可：
@@ -460,16 +482,13 @@ GUI 会话、其它插件都不受影响：
     tickIntervalMs: 60000      # 与生效值相同 → 只为触发重载，行为一个字不变
 ```
 
-三条实测来的注意点：
+两条实测来的注意点：
 
 1. **必须是"有实际差异"的改动**。加一条 `config: {}`（跟原值一样）**不会**触发重载 ——
    loader 比的是组合后的树，不是文件的 mtime。
-2. **重载重跑的是 `apply()`，不是"重新解析这个包"**。入口模块本身（以及它算出来的
-   `lib/team.js` 路径）在进程启动时就定了：把 profile 里 `node_modules/dsh-plugin-team`
-   的软链换到另一个目录，**必须重启**才认。
-3. **确认生效看日志**，不要只看"没报错"：`~/.dsh/team/logs/team.jsonl` 里会出现新的
+2. **确认生效看日志**，不要只看"没报错"：`~/.dsh/team/logs/team.jsonl` 里会出现新的
    `已激活` + `拨号` + `长连接就绪` 三行（顺序如此）。用完把那条临时条目删掉即可
-   （删除同样会再触发一次重载，代码不变）。
+   （删除同样会再触发一次重载）。
 
 **面板那一半**（`lib/client.js`）是浏览器里的经典脚本，由宿主按"bundle rev"从磁盘读并带
 缓存戳下发：宿主重载/重启后**刷新页面**（⌘⇧R）就是新版本。宿主半边没换、只刷新页面的话，
