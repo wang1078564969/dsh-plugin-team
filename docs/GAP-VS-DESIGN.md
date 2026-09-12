@@ -150,7 +150,7 @@
 | **`on_timeout` 是装饰** | `dueAction()` 只看门禁名：`start` 一律释放、`accept` 一律升级。于是 `start.on_timeout='escalate_to_owner'`（别自动放掉我的任务）**照着释放** | 策略驱动：只有 `auto_release` 才释放；配置校验直接拒绝"配了但没有对应机器动作"的组合（`auto_release` 只允许在 `start` 上） |
 | **决策对象（ADR）** | 只有 schema：`parseDecision` 除测试无人调用，且 store 生成 `dec-` 前缀、schema 只认 `adr-` → 真造一条立刻校验失败 | store 前缀改 `adr-`；新增 `record_decision`（AI/人都能记），`related.requirements` 双向可追；实测 `adr-2026-001` 落盘并在需求上记下引用 |
 | **`withHistory` 记不下人的理由** | 只有 `effects`（系统要做什么），"人为什么这么决定"无处可写 | 加第四个参数 `reason`，`reject_review` 用它记"缺单测"这类理由 |
-| **原生卡片的 footer 整段丢失** | `cards.js` 的 `buildCardJson` 不渲染 `card.footer`，只有 markdown 分支里有 | 见"接下来"（本轮先记下，未改） |
+| **原生卡片的 footer 整段丢失** | `cards.js` 的 `buildCardJson` 不渲染 `card.footer`，只有 markdown 分支里有 | ✅ 已修（批次⑤）：渲染成末段 `note`，并且真的有数据可放（耗时 / token / 步数 / CI 状态） |
 
 ### 第二批：出站通知链（A 类接完，2026-09-12）
 
@@ -239,23 +239,26 @@
 | **仓库知识索引**（03 §1.7） | 无 | `indexRepo()` 扫真实检出（目录、清单、scripts、测试目录、CI 文件、README 开头），`repo op=overview` 写成 `docs/specs/<repo>-overview.md`（带 frontmatter，`related.repos` 指回仓库）—— 机器人改代码前先读它 |
 | **仓库↔需求关联**（03 §1） | `knownRepos` 只存了个名字 | 新增 `repos.roots`（名字 → 检出路径）与 `repos.{ciTimeoutMs,requiredApprovals,autoMerge}`（自动合并默认关，设计原话"默认关闭，按需开启"） |
 
-### 建议顺序
+### 建议顺序（七批全部落地，2026-09-12）
 
-1. ~~**A 类接完：出站通知链**~~ ✅ **已完成**（见上一节）。
-2. **超额完成：需求闭环**（`findDuplicate` 去重、`decideAsk` 追问、`change/drop/suspend` 入口、
-   需求 `done/archived` 路径、多人验收门禁语义）—— 一件 M，逐项 S。现在需求只进不出、
-   同一件事会建三遍、建完没人澄清也废不掉。
-3. **权限与作用域强制层**（`permissions.cannot` / `scope` / `budget` + 角色域 `fallback` +
-   任务类型→域映射）—— 一件 M。设计里最不能出错的一条："需求机器人手里不该有 git 写权限"，
-   现在一个被派活的需求机器人和开发机器人权限完全一样。
-4. **日志页 + 漏单检测 + 分诊结论可见 + 表态（reaction）** —— S/S/S/S，"出问题第一眼"。
-5. **卡片与渲染的零碎**：footer 三字段、表格单元格清理、事件 `post` 富文本、图片回执、
-   `event_id` 去重键 + 保留窗口 —— 逐项 S。
-6. **B 类"载体"两件**（文档 frontmatter/陈旧检测；记忆复用 DSH 会话历史 + 工作区文件）—— 各 L，先定形状。
-7. **Git/MR/CI 对接** —— L，且要先确认是否真要（`00` §5.2 至今列在"待定"）。
-   **做不到的部分已明确**：飞书卡片按钮与 Git webhook 都需要公网入站 HTTPS，而 DSH Web 只监听
-   `127.0.0.1`；替代方案是设计自己的"去按钮"级 + 群文本命令，以及让 agent 在工作目录里用
-   `gh`/`git` 自己完成检出与 MR，插件只记关联并在合并时过门禁。
+| # | 计划 | 状态 |
+|---|---|---|
+| 1 | A 类接完：出站通知链 | ✅ 已落地（`lib/notify.js`），卡台账、节流、聚合、补发、@配额都在跑 |
+| 2 | 需求闭环（去重 / 追问 / change·drop·suspend / done·archived / 多人验收） | ✅ 已落地（批次③） |
+| 3 | 权限与作用域强制层（`cannot` / `scope` / 角色能力 / 任务类型→域） | ✅ 已落地（批次③）：`gateWrite()` 挡在 accept/start/submit/verify 上，`run_task` 前有机器人与仓库两道闸 |
+| 4 | 日志页 + 漏单 + 分诊结论 + 表态 + 降级率 + 发言占比 | ✅ 已落地（批次④）：`/api/team/logs` + 第六个页签 + `lib/metrics.js`（> 25% 告警） |
+| 5 | 卡片与渲染零碎（footer / 单元格 / `post` / 图片 / `event_id` / 保留窗口） | ✅ 已落地（批次⑤）：另加真实 `@`、话题隔离、日报 |
+| 6 | B 类载体两件（文档 frontmatter·陈旧检测；记忆复用） | ✅ 已落地（批次⑥）：`lib/docs.js` + `lib/recall.js`，**不建自建记忆库**（设计 07 §0.3） |
+| 7 | Git/MR/CI 对接 | ✅ 已落地（批次⑦）：分支与 trailer 约定、CI 状态机与 `ci_stuck`、合并三道门、仓库知识索引 |
+
+**仍然做不到的（写在这里，避免被当成遗漏）**：
+
+- 飞书卡片按钮与 Git webhook 都需要**公网入站 HTTPS**，而 DSH Web 只监听 `127.0.0.1` ——
+  所以确认动作走**群文本命令**，开 MR / 合并由执行会话里的 `git` / `gh` 完成，插件只记关联与判定；
+- 设计 04 §8 的**审批三档**（允许一次 / 本次会话 / 始终）与 DSH 的 approval 服务还没接；
+- 09 §2.4 里的**画像**与**技能库/知识包**按设计 07 §0.3 的建议暂不做（前者与"这个人的会话与
+  任务"高度重合，后者没有真实使用者）；
+- **token/成本按机器人按天**的记账：`budget` 字段已在名册里，但还没有按群的用量聚合。
 
 ## 八、用户补充的需求：每个群一个主机器人，负责这个群所有消息的记录
 
