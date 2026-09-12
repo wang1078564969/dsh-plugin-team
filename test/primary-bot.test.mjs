@@ -16,7 +16,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 
 import { loadConfig } from '../lib/config.js'
-import { pickPrimaryBot } from '../lib/bots.js'
+import { isRegisteredChat, pickPrimaryBot } from '../lib/bots.js'
 import { noteMessage } from '../lib/sessions.js'
 import { createHandlers } from '../lib/tools.js'
 import { Store } from '../lib/store.js'
@@ -121,6 +121,30 @@ test('a human can hand a group to another bot, explicitly and traceably', () => 
     const ghost = handlers.set_primary_bot({ id: 'oc_a', assignee: 'bot:nobody', actor: 'human:owner' })
     assert.equal(ghost.ok, false)
     assert.equal(ghost.code, 'not_found')
+  } finally {
+    cleanup()
+  }
+})
+
+test('isRegisteredChat：只有"某个启用机器人的 chats 里列了它"或 allowlist 才算登记', () => {
+  const { config, cleanup } = makeStore()
+  try {
+    assert.equal(isRegisteredChat(config, 'oc_a').ok, false, '出厂名册里 chats 都是空的（=服务所有群，但没登记任何群）')
+    const withChats = loadConfig({
+      dataDir: '/tmp/none',
+      bots: [{ id: 'dev', role: 'dev', enabled: true, feishu: { chats: ['oc_dev'] } }],
+      feishu: { appId: 'cli_one', chatAllowlist: ['oc_allow'] },
+    })
+    assert.deepEqual(isRegisteredChat(withChats, 'oc_dev'), { ok: true, via: 'dev' })
+    assert.deepEqual(isRegisteredChat(withChats, 'oc_allow'), { ok: true, via: 'allowlist' })
+    assert.equal(isRegisteredChat(withChats, 'oc_other').ok, false)
+    // 停用的机器人登记了也不算：它的 chats 不生效
+    const disabled = loadConfig({
+      dataDir: '/tmp/none',
+      bots: [{ id: 'dev', role: 'dev', enabled: false, feishu: { chats: ['oc_dev'] } }],
+      feishu: { appId: 'cli_one' },
+    })
+    assert.equal(isRegisteredChat(disabled, 'oc_dev').ok, false)
   } finally {
     cleanup()
   }

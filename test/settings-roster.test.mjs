@@ -15,6 +15,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 
 import { loadConfig } from '../lib/config.js'
+import { isRegisteredChat } from '../lib/bots.js'
 import { appDescriptors, appsView } from '../lib/feishu/apps.js'
 import { mergePatch, projectMemberSenders, readConfigDoc, redact, saveConfig, validatePatch } from '../lib/settings.js'
 
@@ -382,6 +383,56 @@ test('an app entry WITHOUT a secret leaves the installation-level one alone', ()
     const app = appDescriptors(loadConfig({ dataDir: world.dir })).find((one) => one.appId === 'cli_x')
     assert.equal(app.ready, true)
     assert.equal(app.name, '需求线')
+  } finally {
+    world.cleanup()
+  }
+})
+
+test('任务类型与域的兜底确认人在配置台是**可写且会被校验**的', () => {
+  const world = makeWorld({ feishu: { appId: 'cli_x', appSecret: 's0' } })
+  try {
+    // 合法：覆盖一个类型 + 给一个域配兜底人
+    const ok = world.save({
+      taskTypes: { code_change: { domains: ['development', 'security'] } },
+      domainFallbacks: { security: 'human:cso' },
+    })
+    assert.equal(ok.ok, true, JSON.stringify(ok.problems ?? []))
+    const doc = world.doc()
+    assert.deepEqual(doc.taskTypes.code_change.domains, ['development', 'security'])
+    assert.equal(doc.domainFallbacks.security, 'human:cso')
+
+    // 未知域：拒绝，并把已知域列出来（而不是让人对着"未知"猜）
+    const badDomain = world.save({ taskTypes: { code_change: { domains: ['develpoment'] } } })
+    assert.equal(badDomain.ok, false)
+    assert.equal(badDomain.problems[0].path, 'taskTypes.code_change.domains')
+    assert.match(badDomain.problems[0].message, /未知角色域/)
+
+    // 一个域都没有：拒绝（没有域就没人会被拉进确认）
+    const empty = world.save({ taskTypes: { code_change: { domains: [] } } })
+    assert.equal(empty.ok, false)
+    assert.match(empty.problems[0].message, /至少要一个域/)
+
+    // 兜底人必须是主体形状
+    const badWho = world.save({ domainFallbacks: { security: 'cso' } })
+    assert.equal(badWho.ok, false)
+    assert.equal(badWho.problems[0].path, 'domainFallbacks.security')
+  } finally {
+    world.cleanup()
+  }
+})
+
+test('群准入的两个键可写、会被校验，并且是"登记过的群才处理"的开关', () => {
+  const world = makeWorld({ feishu: { appId: 'cli_x', appSecret: 's0' } })
+  try {
+    const ok = world.save({ feishu: { requireRegisteredChat: true, chatAllowlist: ['oc_a'] } })
+    assert.equal(ok.ok, true, JSON.stringify(ok.problems ?? []))
+    const config = loadConfig({ dataDir: world.dir })
+    assert.equal(config.feishu.requireRegisteredChat, true)
+    assert.deepEqual(config.feishu.chatAllowlist, ['oc_a'])
+
+    const bad = world.save({ feishu: { chatAllowlist: ['not-a-chat'] } })
+    assert.equal(bad.ok, false)
+    assert.equal(bad.problems[0].path, 'feishu.chatAllowlist[0]')
   } finally {
     world.cleanup()
   }

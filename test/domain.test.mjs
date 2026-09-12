@@ -610,50 +610,77 @@ test('硬闸三 gate_incomplete：确认**累积**、缺一方不推进（不是
    * 所以这里与 hub **故意不同**：第一次确认返回 `ok: true` + `partial: true`，
    * 状态不动但这一票记下了；调用方（工具层）会把它写回对象。
    */
-  const base = fixture('in_review', { assignee: QA })
-  const acceptance = { ...base.gates.acceptance, required_by: [REQ_OWNER, DEV], confirmed_by: [] }
+  const base = fixture('in_review', { assignee: DEV })
+  // 两个**非主 owner、也不是执行者**的确认人：这样才是在测"跨域并行确认"的累积，
+  // 而不是"主 owner 一句话就关掉"（那是另一条规则，下面有单独的用例）。
+  const acceptance = { ...base.gates.acceptance, required_by: [QA, PM], confirmed_by: [] }
   const t = { ...base, evidence: EVIDENCE, gates: { ...base.gates, acceptance } }
-  const acceptorsFor = ctx({ acceptors: [REQ_OWNER, DEV] })
+  const acceptorsFor = ctx({ acceptors: [QA, PM] })
 
-  const first = transitionTask(t, 'verify', REQ_OWNER, acceptorsFor)
+  const first = transitionTask(t, 'verify', QA, acceptorsFor)
   assert.equal(first.ok, true, '这一票有效，不该被丢掉')
   assert.equal(first.partial, true, '但任务还没完成')
-  assert.deepEqual(first.pending, [DEV], '还差谁能直接拿去催办')
+  assert.deepEqual(first.pending, [PM], '还差谁能直接拿去催办')
   assert.equal(first.next.state, 'in_review', '状态不动：缺一方不推进')
   assert.equal(
-    first.next.gates.acceptance.confirmed_by.some((one) => one.by === REQ_OWNER),
+    first.next.gates.acceptance.confirmed_by.some((one) => one.by === QA),
     true,
     '第一票记在门禁上（这就是不再 ping-pong 的地方）',
   )
 
   // 把"半确认"写回对象之后，第二个人一点就齐活。
-  const second = transitionTask(first.next, 'verify', DEV, acceptorsFor)
+  const second = transitionTask(first.next, 'verify', PM, acceptorsFor)
   assert.equal(second.ok, true, JSON.stringify(second))
   assert.equal(second.partial, undefined)
   assert.equal(second.next.state, 'done')
   assert.deepEqual(
     second.next.gates.acceptance.confirmed_by.map((c) => c.by),
-    [REQ_OWNER, DEV],
+    [QA, PM],
     '两条确认都在，顺序保持追加',
   )
 
   // 同一个人确认两次不会写两条（satisfyGate 既有语义）
-  const again = transitionTask(first.next, 'verify', REQ_OWNER, acceptorsFor)
+  const again = transitionTask(first.next, 'verify', QA, acceptorsFor)
   assert.equal(again.partial, true)
-  assert.equal(again.next.gates.acceptance.confirmed_by.filter((c) => c.by === REQ_OWNER).length, 1)
+  assert.equal(again.next.gates.acceptance.confirmed_by.filter((c) => c.by === QA).length, 1)
 })
 
-test('satisfyGate 第一步：门禁列了名单，名单外的人（哪怕是需求负责人）不能点头', () => {
+test('主 owner 的确认能关掉这道门（"多人协作由主 owner 确认"）', () => {
+  /*
+   * 与上一条并不矛盾，是两个半句：各域负责人各自点头才算齐；而**需求负责人**——
+   * 对这件事最终负责的人——点头就代表"我认了，不用再等"。
+   * 缺这一条，两域的任务会永远要求两个人；只有这一条，跨域确认又变成一个人说了算。
+   */
+  const base = fixture('in_review', { assignee: DEV })
+  const acceptance = { ...base.gates.acceptance, required_by: [QA, PM], confirmed_by: [] }
+  const t = { ...base, evidence: EVIDENCE, gates: { ...base.gates, acceptance } }
+  const result = transitionTask(t, 'verify', REQ_OWNER, ctx({ acceptors: [REQ_OWNER, QA, PM] }))
+  assert.equal(result.ok, true, JSON.stringify(result))
+  assert.equal(result.partial, undefined, '主 owner 点头就完成，不再等 DEV/QA')
+  assert.equal(result.next.state, 'done')
+})
+
+test('satisfyGate 第一步：门禁列了名单，名单外的人不能点头（主 owner 例外，见下）', () => {
   const base = fixture('in_review')
   const t = {
     ...base,
     evidence: EVIDENCE,
     gates: { ...base.gates, acceptance: { ...base.gates.acceptance, required_by: [DEV] } },
   }
-  const result = transitionTask(t, 'verify', REQ_OWNER, ctx({ acceptors: [REQ_OWNER] }))
-  expectErr(result, 'forbidden')
-  assert.deepEqual(result.pending, [DEV])
-  assert.equal(result.message, '你不是"acceptance"门禁的确认人')
+  // 与这件事无关的人（不是确认人、不是主 owner、也没有治理权）
+  const outsider = transitionTask(t, 'verify', 'human:someone-else', ctx({ acceptors: ['human:someone-else'] }))
+  expectErr(outsider, 'forbidden')
+  assert.deepEqual(outsider.pending, [DEV])
+  assert.equal(outsider.message, '你不是"acceptance"门禁的确认人')
+
+  /*
+   * 而**主 owner** 现在是例外：他点头就代表"我认了"（设计 00 §5.1）。
+   * 名单管的是"谁必须点头"，不是"只有谁能点头" —— 这条以前把需求负责人
+   * 挡在自己需求的门禁外面。
+   */
+  const owner = transitionTask(t, 'verify', REQ_OWNER, ctx({ acceptors: [REQ_OWNER] }))
+  assert.equal(owner.ok, true, JSON.stringify(owner))
+  assert.equal(owner.next.state, 'done')
 })
 
 test('satisfyGate 第二步：名单为空时只有需求负责人 / pm 能代确认', () => {

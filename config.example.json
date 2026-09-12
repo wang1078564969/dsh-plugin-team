@@ -92,6 +92,19 @@
     }
   ],
 
+  "//taskTypes": "任务类型 → 所需域。**决定一个任务跨越哪些域、谁会被拉进确认名单**。内置 9 个（code_change/defect_fix/feature_delivery/release/incident/new_feature/requirement_clarify/data_change/doc_update），这里按类型逐个覆盖。",
+  "taskTypes": {
+    "code_change": { "domains": ["development"] },
+    "defect_fix": { "domains": ["development", "testing"] },
+    "release": { "domains": ["development", "ops"] },
+    "data_change": { "domains": ["data", "development"] }
+  },
+
+  "//domainFallbacks": "每个域的兜底确认人：域里没人时用它，否则跨域任务会**静默卡在门禁上**（等一个不存在的人）。",
+  "domainFallbacks": {
+    "security": "human:wangmengfan"
+  },
+
   "//domains": "域 → 负责人。它现在是派生结果（由 members 每行的 domains 并出来），也可以像下面这样单独写；台账的「谁该确认」读的就是它。",
   "domains": {
     "pm": ["human:wangmengfan"],
@@ -128,6 +141,9 @@
     "//buttons": "卡片按钮需要飞书能回调到的 HTTPS 入口；DSH Web 只监听 127.0.0.1，所以默认关闭，卡片上写文本指令",
     "buttons": false,
     "//chatIds": "这个键已经删除：插件从来没有读它（填了也不会只处理那些群）。群绑定在机器人身上 —— 见上面 bots[].feishu.chats。留在这里的旧值会被配置检查直接拒绝，理由是「别让人以为它生效」。",
+    "//requireRegisteredChat": "准入第一道：只处理登记过的群（某个启用机器人的 chats 里列了它，或在 chatAllowlist 里）。默认 false —— 被拉进哪个群就在哪个群干活",
+    "requireRegisteredChat": false,
+    "chatAllowlist": [],
     "//speakLeaseMs": "两个机器人都可能接话时，先开口的那个把这个群占住多久",
     "speakLeaseMs": 90000,
     "//senders": "open_id → human:<名字>。没登记的人只能看，不能改台账（否则谁都能替别人确认任务）",

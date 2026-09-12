@@ -760,3 +760,172 @@ test('需求负责人总能验收（哪怕他不是任何角色域的负责人�
     rmSync(dir, { recursive: true, force: true })
   }
 })
+
+test('任务类型决定谁进确认名单（跨域任务是多个确认人）', async () => {
+  /*
+   * 设计 03 §2.4② / 02 §5.4：任务类型 → 所需域，而所需域决定**谁会进确认名单**。
+   * 以前 `domains` 完全由模型现给，于是"这活算开发还是算测试"取决于模型当天怎么想。
+   */
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-team-tasktype-'))
+  const config = loadConfig({
+    dataDir: dir,
+    workspace: join(dir, 'ws'),
+    tickIntervalMs: 0,
+    members: { requirement: ['human:pm1'], development: ['human:dev'], testing: ['human:qa'] },
+  })
+  const store = new Store(dir).load()
+  const handlers = createHandlers({
+    ctx: { get: () => undefined, effect: (factory) => factory() },
+    config,
+    store,
+    pool: { open: async () => {}, drive: async () => ({}) },
+  })
+  try {
+    const req = handlers.create_requirement({ title: '跨域', owner: 'human:pm1', problem: 'p' })
+    handlers.confirm_requirement({ id: req.id, actor: 'human:pm1' })
+    // 不给 domains：由类型推导（feature_delivery → development + testing）
+    const proposed = handlers.propose_tasks({
+      id: req.id,
+      tasks: [{ title: '功能交付', type: 'feature_delivery', assignee: 'bot:dev' }],
+    })
+    assert.equal(proposed.ok, true, JSON.stringify(proposed))
+    const task = store.get('task', proposed.tasks[0].id)
+    assert.deepEqual(task.domains, ['development', 'testing'], '域由任务类型推导')
+    assert.deepEqual(
+      task.gates.acceptance.required_by,
+      ['human:pm1', 'human:dev', 'human:qa'],
+      '需求负责人 + 两个域的负责人都要确认（缺一方不推进）',
+    )
+
+    // 显式给 domains 时以调用方为准（模型知道得更细的情况）
+    const explicit = handlers.propose_tasks({
+      id: req.id,
+      tasks: [{ title: '只改文档', type: 'doc_update', domains: ['docs'], assignee: 'bot:dev' }],
+    })
+    assert.equal(explicit.ok, true)
+    assert.deepEqual(store.get('task', explicit.tasks[0].id).domains, ['docs'])
+
+    // 认不出的类型：仍然建得出来，但**必须报出来**（静默按开发域走最坏）
+    const typo = handlers.propose_tasks({ id: req.id, tasks: [{ title: '拼错的类型', type: 'code_chagne', assignee: 'bot:dev' }] })
+    assert.equal(typo.ok, true)
+    assert.deepEqual(typo.unknown_types, ['code_chagne'])
+    assert.deepEqual(store.get('task', typo.tasks[0].id).domains, ['development'], '兜底域')
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('成员表真的拦人：观察者只读、停用的要走代理、canApprove 是白名单', async () => {
+  /*
+   * 设计 02 §2 + 05 §3.2 的三档权限。以前成员表的 `role` 与 `canApprove`
+   * **零消费者** —— "观察者不能改台账"在代码里没有任何落点。
+   */
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-team-roleguard-'))
+  const config = loadConfig({
+    dataDir: dir,
+    workspace: join(dir, 'ws'),
+    tickIntervalMs: 0,
+    members: [
+      { key: 'human:pm1', name: 'PM', role: 'owner', domains: ['requirement'], canApprove: [] },
+      { key: 'human:watcher', name: '旁观者', role: 'observer', domains: ['development'] },
+      { key: 'human:away', name: '休假的人', role: 'member', domains: ['development'], active: false },
+      { key: 'human:limited', name: '只管合并的人', role: 'member', domains: ['development'], canApprove: ['merge'] },
+    ],
+  })
+  const store = new Store(dir).load()
+  const handlers = createHandlers({
+    ctx: { get: () => undefined, effect: (factory) => factory() },
+    config,
+    store,
+    pool: { open: async () => {}, drive: async () => ({}) },
+  })
+  try {
+    const req = handlers.create_requirement({ title: '权限', owner: 'human:pm1', problem: 'p' })
+    handlers.confirm_requirement({ id: req.id, actor: 'human:pm1' })
+    const proposed = handlers.propose_tasks({ id: req.id, tasks: [{ title: 'T', assignee: 'bot:dev', domains: ['development'] }] })
+    const taskId = proposed.tasks[0].id
+    handlers.confirm_split({ id: req.id, actor: 'human:pm1' })
+
+    // 观察者：连"接活"都不行（只读）
+    const watcher = handlers.accept_task({ id: taskId, actor: 'human:watcher' })
+    assert.equal(watcher.ok, false)
+    assert.equal(watcher.code, 'member_readonly')
+    assert.match(watcher.message, /观察者/)
+
+    // 停用且无代理：明确说"请他别的人来"，而不是默默通过
+    const away = handlers.accept_task({ id: taskId, actor: 'human:away' })
+    assert.equal(away.ok, false)
+    assert.equal(away.code, 'member_readonly')
+    assert.match(away.message, /已停用/)
+
+    // canApprove 是白名单：只管合并的人不能验收
+    const ran = await handlers.run_task({ id: taskId })
+    assert.equal(ran.ok, true, JSON.stringify(ran))
+    const limited = handlers.verify_task({ id: taskId, actor: 'human:limited' })
+    assert.equal(limited.ok, false)
+    assert.equal(limited.code, 'member_readonly')
+    assert.match(limited.message, /canApprove/)
+
+    // 有权限的人照常
+    const ok = handlers.verify_task({ id: taskId, actor: 'human:pm1' })
+    assert.equal(ok.ok, true, JSON.stringify(ok))
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('机器人的能力与作用域真的拦住执行（"需求机器人不该有写代码的权限"）', async () => {
+  /*
+   * 设计 02 §1.1 那张"绝不能做什么"的表：`permissions.cannot` 与 `scope.repos`
+   * 以前只是字段。这里测的是它们**真的会拒绝**，而且拒绝得说得清原因。
+   */
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-team-botperm-'))
+  const config = loadConfig({
+    dataDir: dir,
+    workspace: join(dir, 'ws'),
+    tickIntervalMs: 0,
+    bots: [
+      { id: 'req', displayName: '需求机器人', role: 'req', enabled: true },
+      // 只该动 pay-service 的开发机器人
+      { id: 'dev', displayName: '开发机器人', role: 'dev', enabled: true, scope: { repos: ['pay-service'] } },
+    ],
+    members: { requirement: ['human:pm1'], development: ['human:dev'] },
+  })
+  const store = new Store(dir).load()
+  const handlers = createHandlers({
+    ctx: { get: () => undefined, effect: (factory) => factory() },
+    config,
+    store,
+    pool: { open: async () => {}, drive: async () => ({ text: 'done', timedOut: false }) },
+  })
+  try {
+    const mk = (label, assignee, repo) => {
+      const req = handlers.create_requirement({ title: label, owner: 'human:pm1', problem: 'p', repos: repo === null ? [] : [repo] })
+      handlers.confirm_requirement({ id: req.id, actor: 'human:pm1' })
+      const proposed = handlers.propose_tasks({ id: req.id, tasks: [{ title: label, type: 'code_change', assignee, repo }] })
+      handlers.confirm_split({ id: req.id, actor: 'human:pm1' })
+      return proposed.tasks[0].id
+    }
+
+    // 需求机器人接代码任务：按角色默认表就该被拒
+    const reqTask = mk('需求机器人跑代码', 'bot:req')
+    const refused = await handlers.run_task({ id: reqTask })
+    assert.equal(refused.ok, false, JSON.stringify(refused))
+    assert.equal(refused.code, 'bot_not_allowed')
+    assert.match(refused.message, /不能 write_code|不能 run_task/)
+
+    // 开发机器人碰 scope 之外的仓库：拒
+    const outOfScope = mk('动别的仓库', 'bot:dev', 'other-service')
+    const scopeRefused = await handlers.run_task({ id: outOfScope })
+    assert.equal(scopeRefused.ok, false, JSON.stringify(scopeRefused))
+    assert.equal(scopeRefused.code, 'bot_out_of_scope')
+    assert.match(scopeRefused.message, /scope\.repos/)
+
+    // 作用域内的仓库：放行
+    const inScope = mk('动自己的仓库', 'bot:dev', 'pay-service')
+    const ran = await handlers.run_task({ id: inScope })
+    assert.equal(ran.ok, true, JSON.stringify(ran))
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
