@@ -20,9 +20,9 @@ DSH 的团队协作层：**需求 / 任务 / 两道人工确认 / 租约 / 决�
 | `lib/index.js` | ✅ boot-safe 入口：加载失败只记日志，**绝不拖垮 harness**（真 Cordis 上下文里验过）；挂四条路由，其中 `GET /api/team/boot` 是**入口自述**（实现死掉时它还在，面板据此把 404 的真话写在页面上） |
 | `lib/domain/`（3.4k 行） | ✅ hub 的领域层移植成纯 ESM JS、零依赖：两个状态机、门禁快照、三条硬闸、租约、超时扫描 |
 | `lib/store.js` | ✅ 一对象一文件的 JSON 台账（原子写、按 kind 决定身份字段、两套 ID 规则） |
-| `lib/config.js` | ✅ 配置解析（env > 配置文件 > row config > 默认值） |
+| `lib/config.js` | ✅ 配置解析（**env > row 的 `config:` 块 > 配置文件 > 默认值**；被 row 固定的键会在面板上列出来） |
 | `lib/exec.js` | ✅ **心脏**：起/复用执行会话（`agents.create`/`resume`）、驱动一轮、等回合结束、读回汇报 |
-| `lib/tools.js` | ✅ `team` 工具（13 个 action）：建需求/拆任务/两道确认/派发执行/提交验收/查台账/扫超时 |
+| `lib/tools.js` | ✅ `team` 工具（**39 个 action**）：建需求/拆任务/两道确认/派发执行/提交验收/查台账/扫超时/记决策/文档/仓库与 CI |
 | `lib/feishu/connection.js` | ✅ **自己的飞书长连接**（官方 SDK）：自己的凭据、自己的群登记、自己的机器人身份；**一个 app 一条连接**，多 app 由连接池逐个拨号；后台建连，不拖住激活 |
 | `lib/bots.js` | ✅ **机器人注册表**：角色 / 基准角色 / 展示名 / 自己的飞书应用 / 所在群 / 发言策略 / 作用域 / 权限 / 模型 / 预算 / skills；路由（点名 > 绑定 > 角色优先级）与「配置问题」 |
 | `lib/members.js` | ✅ **成员表**：一个人一行，角色域分配在**人身上**；兼容旧的 `{域: [人]}` 映射并派生出台账一直读的那张表 |
@@ -553,15 +553,21 @@ TEAM_CLIENT_TEST_MODULES=/path/with/node_modules node --test test/client-render.
 - **一个机器人一个应用才有各自的身份**：不同机器人填同一个 `app_id` 时，它们在飞书里
   是同一张脸（这是飞书的限制，不是插件的）。此时群里只有一个"它"，多机器人只体现在
   角色、会话和卡片头上；配置检查会对这种共享明确告警。
-- **`bots` 里的字段分两批**：`role/baseRole/agentPreset/model/skills/knowledgePack` 现在
-  都真的生效（preset 与模型传给会话，角色决定路由与优先级）；`scope/permissions/budget`
-  已建模、可在面板看到，但**还没有强制层**（设计文档 02 §2 的权限矩阵尚未落到代码）。
+- **`bots` 里的字段分两批**：`role/baseRole/agentPreset/model` 真的生效（preset 与模型传给会话，
+  角色决定路由、优先级与默认能力）；`scope.repos` 与 `cannot` 有强制层（闸在 `run_task` 前，
+  合并资格在 `repo op=merge`），但**只在 `run_task` 与合并判定这两处**。
+  剩下的 —— `scope.projects/docs/memoryScopes`、`approval_required`、`canCreate`、`budget`、
+  `persona`、`skills`、`knowledgePack`、`model.perTask` —— **已建模、面板可见，但没有消费者**（死字段）。
 
 ## 参考
 
+- **`docs/REQUIREMENTS.md`** —— **要做什么**（改造后需求）：形态约束、R1–R14 可验收条目与状态、明确不做、做不到。
+- **`docs/DESIGN.md`** —— 现在是什么（as-built 架构说明书）。
 - **`docs/DSH-PLUGIN-NOTES.md`** —— DSH 插件接口的实测事实（§1~§9 侦察、**§10/§11 写代码时新踩的 14 个坑**）。
   写代码前读这份，能省掉两轮侦察。
-- `../team-agent-architecture/` —— 设计文档（对象与状态机见 `06`，飞书交互见 `04`）
+- **`docs/GAP-VS-DESIGN.md`** —— 历史：与**旧需求**的差距清单（每一批改了什么、为什么）。
+- `../team-agent-architecture/` —— ⚠️ **做错的那版需求**（把载体写成自建 Hub 平台），**已作废、仅作取证**，
+  不要当规格读；其中的对象与状态机章节仍在 `lib/domain/` 里活着。
 - `../hub` —— 旧的外部 Hub。保留作参考，不再开发
 - `../dsh-plugin-feishu-bot` —— 飞书 ↔ DSH 桥，**4700 行，不要重写**；它用的应用只能有一条长连接，
   团队插件现在自己持有连接，所以两者**不能同时跑**。要参考的是它的接缝设计，不是它的配置。
